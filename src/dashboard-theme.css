@@ -1,0 +1,84 @@
+/*
+ * Dashboard design system (Starbucks-inspired) — applied only while the admin/staff Layout is mounted.
+ * Layout adds `sb-app` to <body> so portalled modals/drawers inherit it too. The public landing site is untouched.
+ *
+ * Tokens: Starbucks Green #006241 (headings) · Green Accent #00754A (CTAs) · House Green #1E3932 (bands)
+ *         Uplift #2b5148 · Green Light #d4e9e2 · Canvas #f2f0eb · Ceramic #edebe9 · Text rgba(0,0,0,.87)/.58
+ */
+.sb-app {
+  --sb-green: #006241;
+  --sb-accent: #00754A;
+  --sb-house: #1E3932;
+  --sb-uplift: #2b5148;
+  --sb-light: #d4e9e2;
+  --sb-canvas: #f2f0eb;
+  --sb-ceramic: #edebe9;
+  --sb-text: rgba(0, 0, 0, 0.87);
+  --sb-text-soft: rgba(0, 0, 0, 0.58);
+  --sb-card-shadow: 0 0 0.5px 0 rgba(0, 0, 0, 0.14), 0 1px 1px 0 rgba(0, 0, 0, 0.24);
+  --sb-nav-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 2px 2px rgba(0, 0, 0, 0.06), 0 0 2px rgba(0, 0, 0, 0.07);
+  --sb-frap-shadow: 0 0 6px rgba(0, 0, 0, 0.24), 0 8px 12px rgba(0, 0, 0, 0.14);
+
+  font-family: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  letter-spacing: -0.01em;
+  color: var(--sb-text);
+  background-color: var(--sb-canvas);
+}
+
+/* ---- Colour-block surfaces: no gradients — a gradient collapses to its start colour ---- */
+.sb-app [class*="bg-gradient-to-"]:not(.bg-clip-text) {
+  background-image: none !important;
+  background-color: var(--tw-gradient-from) !important;
+}
+
+/* ---- Cards: white, 12px, whisper shadow (glass effects removed) ---- */
+.sb-app :is(.bg-white\/40, .bg-white\/50, .bg-white\/60, .bg-white\/70, .bg-white\/80, .bg-white\/90) {
+  background-color: #fff !important;
+}
+.sb-app [class*="backdrop-blur"] {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+.sb-app :is(.rounded-xl, .rounded-2xl, .rounded-3xl) { border-radius: 12px !important; }
+.sb-app [class*="shadow-"]:not(.shadow-none):not(.sb-keep-shadow) { box-shadow: var(--sb-card-shadow) !important; }
+.sb-app :is(.bg-gray-900, .bg-gray-950) { background-color: var(--sb-house) !important; }
+
+/* ---- Buttons: full pill, press = scale(.95) ---- */
+.sb-app button { border-radius: 50px !important; transition: all 0.2s ease; }
+.sb-app button.sb-square { border-radius: 12px !important; }
+.sb-app button:not(:disabled):active { transform: scale(0.95); }
+
+/* ---- Inputs: outlined 4px rectangles, Green Accent focus ---- */
+.sb-app :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea) {
+  border-radius: 4px !important;
+  border-color: #d6dbde;
+}
+.sb-app :is(input, select, textarea):focus {
+  border-color: var(--sb-accent) !important;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(0, 117, 74, 0.14) !important;
+}
+.sb-app input[type="checkbox"], .sb-app input[type="radio"] { accent-color: var(--sb-accent); }
+
+/* ---- Type: weight + colour carry hierarchy ---- */
+.sb-app main h1:not([class*="text-white"]) { color: var(--sb-green); font-weight: 600; letter-spacing: -0.16px; }
+.sb-app :is(.text-gray-900, .text-gray-800, .text-gray-700) { color: var(--sb-text); }
+.sb-app :is(.text-gray-600, .text-gray-500) { color: var(--sb-text-soft); }
+
+/* ---- Frap: floating circular primary action ---- */
+.sb-frap {
+  position: fixed; right: 20px; bottom: 20px; z-index: 35;
+  width: 56px; height: 56px; border-radius: 50% !important;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--sb-accent); color: #fff;
+  box-shadow: var(--sb-frap-shadow) !important;
+}
+.sb-frap::after { content: ""; position: absolute; inset: -8px; border-radius: 50%; } /* larger tap area */
+.sb-frap:hover { background: var(--sb-green); }
+.sb-frap:active { transform: scale(0.95); box-shadow: 0 0 6px rgba(0, 0, 0, 0.24), 0 8px 12px rgba(0, 0, 0, 0) !important; }
+@media (min-width: 768px) { .sb-frap { right: 32px; bottom: 32px; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .sb-app button { transition: none; }
+  .sb-app button:not(:disabled):active { transform: none; }
+}
