@@ -7,7 +7,7 @@ import {
 import toast from 'react-hot-toast';
 import { createPortal } from 'react-dom';
 import { apiFetch, assetUrl, downloadInvoicePdf } from '../utils/api';
-import { unitOf, isLowStock, formatQty } from '../utils/units';
+import { isLowStock, formatQty, formatStock, perLabel } from '../utils/units';
 
 const inr = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
 const fmtDate = (d) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -299,9 +299,9 @@ export default function BranchDetail() {
                       <div className="text-xs text-gray-400 font-mono">{p.sku} · <span className="capitalize font-sans">{p.category}</span></div>
                       <div className="mt-2 flex items-center justify-between">
                         <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold ${low ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}>
-                          {low && <AlertCircle size={12} />} {formatQty(p.stock, unitOf(p))}{low ? ' left' : ''}
+                          {low && <AlertCircle size={12} />} {formatStock(p.stock, p)}{low ? ' left' : ''}
                         </span>
-                        <span className="text-xs text-gray-500">{inr(p.price)}{unitOf(p) !== 'pcs' && `/${unitOf(p)}`}</span>
+                        <span className="text-xs text-gray-500">{inr(p.price)}{perLabel(p)}</span>
                       </div>
                     </div>
                   </div>
@@ -342,7 +342,7 @@ export default function BranchDetail() {
                     <div key={i} className="flex justify-between gap-3 text-sm">
                       <div>
                         <div className="font-medium text-gray-900">{p.itemName}</div>
-                        <div className="text-xs text-gray-500">{formatQty(p.quantity, p.unit)} × {inr(p.price)}{p.gstIncluded ? ' · incl. GST' : ''}</div>
+                        <div className="text-xs text-gray-500">{formatQty(p.quantity, p.unit)} × {inr(p.price)}{perLabel(p)}{p.gstIncluded ? ' · incl. GST' : ''}</div>
                       </div>
                       <div className="font-semibold text-gray-900">{inr(p.total)}</div>
                     </div>

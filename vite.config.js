@@ -9,7 +9,7 @@ export default defineConfig({
     // Mirrors the production nginx rule: /api/* -> Express with the /api prefix stripped
     proxy: {
       '/api': {
-        target: 'http://localhost:5001',
+        target: 'http://localhost:5005',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
       },

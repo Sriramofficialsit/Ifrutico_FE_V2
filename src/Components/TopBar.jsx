@@ -49,7 +49,7 @@ export default function TopBar({ collapsed, mobileOpen, setMobileOpen }) {
 
   return (
     <header
-      className={`fixed right-0 top-0 z-40 h-14 sm:h-16 md:h-20 bg-white transition-all duration-300 left-0 md:left-20 ${collapsed ? '' : 'lg:left-72'}`}
+      className={`fixed right-0 top-0 z-40 h-14 sm:h-16 md:h-20 bg-white transition-all duration-300 left-0 ${collapsed ? 'md:left-20' : 'md:left-72'}`}
       style={{ boxShadow: 'var(--sb-nav-shadow, 0 1px 3px rgba(0,0,0,.1), 0 2px 2px rgba(0,0,0,.06), 0 0 2px rgba(0,0,0,.07))' }}
     >
       <div className="mx-auto h-full max-w-screen-2xl pr-4 sm:pr-6 lg:pr-8 pl-4 sm:pl-6 lg:pl-8 flex items-center justify-between">

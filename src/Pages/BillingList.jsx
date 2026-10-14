@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import toast from 'react-hot-toast';
 import { buildBillMessage } from '../utils/whatsappBill';
-import { formatQty } from '../utils/units';
+import { formatQty, perLabel } from '../utils/units';
 import {
   Eye, Printer, Send, X, ChevronLeft, ChevronRight, Banknote, Smartphone, CreditCard, Mail, Phone,
-  Download, Loader2, Search, Copy, Receipt, IndianRupee, TrendingUp, Store, SearchX,
+  Download, Loader2, Search, Copy, Receipt, IndianRupee, TrendingUp, Store, SearchX, Trash2, AlertTriangle,
 } from 'lucide-react';
 import DOMPurify from 'dompurify';
 import { apiFetch, downloadInvoicePdf } from '../utils/api';
@@ -121,6 +121,11 @@ export default function BillingList() {
   const [viewBill, setViewBill] = useState(null);
   const [settings, setSettings] = useState(null);
   const [downloadingId, setDownloadingId] = useState(null);
+  const [deleteBill, setDeleteBill] = useState(null); // bill awaiting delete confirmation
+  const [restock, setRestock] = useState(true);
+  const [deleting, setDeleting] = useState(false);
+  const deleteRef = useRef(null);
+  useEffect(() => { deleteRef.current = deleteBill; }, [deleteBill]);
   const searchRef = useRef(null);
   const reqId = useRef(0);
 
@@ -164,7 +169,8 @@ export default function BillingList() {
   // Keyboard: "/" focuses search, Esc closes the drawer
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === 'Escape') setViewBill(null);
+      // Esc closes the delete confirmation first, then the drawer
+      if (e.key === 'Escape') { if (deleteRef.current) setDeleteBill(null); else setViewBill(null); }
       if (e.key === '/' && !/input|textarea|select/i.test(document.activeElement?.tagName)) {
         e.preventDefault();
         searchRef.current?.focus();
@@ -197,6 +203,26 @@ export default function BillingList() {
   const hasFilters = search || payment !== 'all' || range !== 'all';
   const clearFilters = () => { setSearchInput(''); setSearch(''); setPayment('all'); setRange('all'); };
 
+  const askDelete = (bill) => { setRestock(true); setDeleteBill(bill); };
+
+  const confirmDelete = async () => {
+    if (!deleteBill || deleting) return;
+    setDeleting(true);
+    try {
+      const res = await apiFetch(`/bill/${deleteBill._id}?restock=${restock}`, { method: 'DELETE' });
+      toast.success(res.message || 'Bill deleted');
+      if (viewBill?._id === deleteBill._id) setViewBill(null);
+      setDeleteBill(null);
+      // Step back a page if this was the last bill on it
+      fetchBills(bills.length === 1 && page > 1 ? page - 1 : page);
+      apiFetch('/bill/stats').then((d) => setStats(d.data)).catch(() => {});
+    } catch (err) {
+      toast.error(err.message || 'Could not delete the bill');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const copyInvoice = (no) => {
     navigator.clipboard?.writeText(no).then(() => toast.success('Invoice number copied'), () => {});
   };
@@ -205,7 +231,7 @@ export default function BillingList() {
     const text = buildBillMessage({
       customerName: bill.customerName,
       invoice: bill.invoiceNumber,
-      items: bill.products.map((p) => ({ name: p.itemName, qty: formatQty(p.quantity, p.unit), price: p.price, total: p.total })),
+      items: bill.products.map((p) => ({ name: p.itemName, qty: formatQty(p.quantity, p.unit), price: p.price, per: perLabel(p), total: p.total })),
       subTotal: bill.subTotal,
       gstAmount: bill.gstAmount,
       total: bill.totalAmount,
@@ -412,6 +438,7 @@ export default function BillingList() {
                       </IconBtn>
                       <IconBtn title="Print" onClick={() => handlePrint(bill)}><Printer size={18} /></IconBtn>
                       <IconBtn title="Send on WhatsApp" onClick={() => handleWhatsApp(bill)} tone="text-[#25D366] hover:bg-[#25D366]/10"><Send size={18} /></IconBtn>
+                      <IconBtn title="Delete bill" onClick={() => askDelete(bill)} tone="text-red-500 hover:bg-red-50"><Trash2 size={18} /></IconBtn>
                     </div>
                     <ChevronRight size={18} className="text-gray-300 group-hover:text-emerald-500 group-hover:translate-x-0.5 transition-all flex-shrink-0 md:hidden" />
                   </div>
@@ -491,7 +518,7 @@ export default function BillingList() {
                     <div key={i} className="flex items-center justify-between gap-3 p-3.5">
                       <div className="min-w-0">
                         <div className="font-semibold text-gray-900 truncate">{p.itemName}</div>
-                        <div className="text-xs text-gray-500">{formatQty(p.quantity, p.unit)} × {inr(p.price)}{p.gstIncluded ? ' · incl. GST' : ''}</div>
+                        <div className="text-xs text-gray-500">{formatQty(p.quantity, p.unit)} × {inr(p.price)}{perLabel(p)}{p.gstIncluded ? ' · incl. GST' : ''}</div>
                       </div>
                       <div className="font-bold text-gray-900 tabular-nums">{inr(p.total)}</div>
                     </div>
@@ -516,6 +543,47 @@ export default function BillingList() {
               </button>
               <button onClick={() => handleWhatsApp(viewBill)} className="h-12 rounded-xl border border-[#25D366]/40 text-[#128C7E] font-semibold flex items-center justify-center gap-2 hover:bg-[#25D366]/10 active:scale-95 transition">
                 <Send size={18} /> Share
+              </button>
+              <button onClick={() => askDelete(viewBill)} className="col-span-3 h-11 rounded-xl text-red-600 font-semibold flex items-center justify-center gap-2 hover:bg-red-50 active:scale-95 transition">
+                <Trash2 size={18} /> Delete bill
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Delete confirmation (above the drawer) */}
+      {deleteBill && createPortal(
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/40 sm:p-4 animate-fade-in" onClick={() => !deleting && setDeleteBill(null)}>
+          <div role="alertdialog" aria-modal="true" aria-labelledby="del-bill-title" onClick={(e) => e.stopPropagation()}
+            className="w-full sm:max-w-sm bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl p-6 space-y-5 animate-zoom-in">
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 rounded-full bg-red-50 text-red-600 flex items-center justify-center flex-shrink-0"><AlertTriangle size={22} /></div>
+              <div className="min-w-0">
+                <h3 id="del-bill-title" className="text-lg font-semibold text-gray-900">Delete this bill?</h3>
+                <p className="text-sm text-gray-500 mt-1">
+                  <span className="font-mono text-gray-700 break-all">{deleteBill.invoiceNumber}</span><br />
+                  {deleteBill.customerName} · <b className="text-gray-900">{inr(deleteBill.totalAmount)}</b>
+                </p>
+                <p className="text-sm text-gray-500 mt-2">This can't be undone. It will also drop out of sales reports.</p>
+              </div>
+            </div>
+            <label className="flex items-start gap-3 p-3 rounded-xl border border-gray-200 cursor-pointer hover:bg-gray-50">
+              <input type="checkbox" checked={restock} onChange={(e) => setRestock(e.target.checked)} className="mt-0.5 w-4 h-4" />
+              <span className="text-sm">
+                <span className="font-medium text-gray-900">Return items to stock</span>
+                <span className="block text-gray-500">Adds the sold quantities back to the stock they were billed from.</span>
+              </span>
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <button type="button" onClick={() => setDeleteBill(null)} disabled={deleting}
+                className="h-11 border border-gray-200 text-gray-700 font-semibold hover:bg-gray-50 disabled:opacity-60">
+                Cancel
+              </button>
+              <button type="button" onClick={confirmDelete} disabled={deleting}
+                className="h-11 bg-red-600 hover:bg-red-700 text-white font-semibold flex items-center justify-center gap-2 disabled:opacity-60">
+                {deleting ? <Loader2 size={18} className="animate-spin" /> : <Trash2 size={18} />} Delete
               </button>
             </div>
           </div>

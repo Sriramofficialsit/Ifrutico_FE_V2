@@ -1,11 +1,11 @@
 const inr = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
 
-// items: [{ name, qty (already formatted, e.g. "0.5 kg"), price, total }]
+// items: [{ name, qty (already formatted, e.g. "0.5 kg"), price, per (e.g. "/500 g", optional), total }]
 // Plain text only: emojis get corrupted by wa.me links on some WhatsApp clients.
 export const buildBillMessage = ({ customerName, invoice, items, subTotal, gstAmount, total, paymentMethod, gstNumber }) => {
   const line = '━━━━━━━━━━━━━━━━━━';
   const rows = items.map((it, i) =>
-    `${i + 1}. *${it.name}*\n    ${it.qty} × ${inr(it.price)}  =  ${inr(it.total)}`
+    `${i + 1}. *${it.name}*\n    ${it.qty} × ${inr(it.price)}${it.per || ''}  =  ${inr(it.total)}`
   );
 
   return [

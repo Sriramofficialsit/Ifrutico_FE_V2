@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
-import { UNITS, unitOf, isLowStock, formatQty } from '../utils/units';
+import { UNITS, unitOf, isLowStock, formatQty, priceQtyOf, perLabel, toPacks, fromPacks, formatStock, stockUnitLabel } from '../utils/units';
 import { Plus, Edit, AlertCircle, X, Trash2, ArrowRightLeft, Layers, Image as ImageIcon } from 'lucide-react';
 import { useAuth } from '../Context/AuthContext';
 import { apiFetch, assetUrl } from '../utils/api';
 import { createPortal } from 'react-dom';
 import toast from 'react-hot-toast';
 
-const VALID_CATEGORIES = ["fruits", "vegetables", "flowers", "nuts", "spices", "herbals"];
+const PRESET_CATEGORIES = ["fruits", "vegetables", "flowers", "nuts", "spices", "herbals"];
+const CUSTOM = "__custom__"; // category <select> value that reveals the free-text input
 
 export default function Stock() {
   const { user } = useAuth();
@@ -38,12 +39,15 @@ export default function Stock() {
     itemName: '',
     sku: '',
     category: 'fruits',
+    customCategory: '',
     price: '',
+    priceQty: '1', // price is for this many units, e.g. ₹120 per 500 g
     unit: 'pcs',
     gstIncluded: false, // false = price is before GST (5% added at billing)
     stock: '',
   });
   const [imageFiles, setImageFiles] = useState([]);
+  const [categories, setCategories] = useState(PRESET_CATEGORIES);
 
   const fetchItems = (p = 1) => {
     setLoading(true);
@@ -91,7 +95,7 @@ export default function Stock() {
     try {
       await apiFetch('/product/transfer', {
         method: 'POST',
-        body: { sku: transferItem.sku, branchId: transfer.branchId, quantity: Number(transfer.quantity), direction: transfer.direction },
+        body: { sku: transferItem.sku, branchId: transfer.branchId, quantity: fromPacks(transfer.quantity, transferItem), direction: transfer.direction },
       });
       toast.success('Stock transferred');
       setTransferItem(null);
@@ -131,11 +135,15 @@ export default function Stock() {
   const fillMax = () =>
     setBulk((b) => ({
       ...b,
-      qty: Object.fromEntries(selectedItems.map((i) => [i.sku, String(availableFor(i, b.branchId, b.direction))])),
+      qty: Object.fromEntries(selectedItems.map((i) => [i.sku, String(toPacks(availableFor(i, b.branchId, b.direction), i))])),
     }));
 
-  const bulkLines = selectedItems
-    .map((i) => ({ item: i, quantity: Number(bulk.qty[i.sku]) || 0, available: availableFor(i, bulk.branchId, bulk.direction) }));
+  // Quantities are typed in packs; "max" maps back to the exact available amount so rounding can't overshoot it
+  const bulkLines = selectedItems.map((i) => {
+    const available = availableFor(i, bulk.branchId, bulk.direction);
+    const packs = Number(bulk.qty[i.sku]) || 0;
+    return { item: i, quantity: packs === toPacks(available, i) ? available : fromPacks(packs, i), available };
+  });
   const bulkReady = bulk.branchId && bulkLines.some((l) => l.quantity > 0) && bulkLines.every((l) => l.quantity <= l.available);
 
   const handleBulkTransfer = async (e) => {
@@ -143,7 +151,7 @@ export default function Stock() {
     const lines = bulkLines.filter((l) => l.quantity > 0);
     if (!bulk.branchId || lines.length === 0) { toast.error('Choose a branch and enter at least one quantity'); return; }
     const over = lines.find((l) => l.quantity > l.available);
-    if (over) { toast.error(`${over.item.itemName}: only ${formatQty(over.available, unitOf(over.item))} available`); return; }
+    if (over) { toast.error(`${over.item.itemName}: only ${formatStock(over.available, over.item)} available`); return; }
     setSubmitting(true);
     try {
       const res = await apiFetch('/product/transfer-bulk', {
@@ -166,16 +174,21 @@ export default function Stock() {
 
   const openModal = (item = null) => {
     setImageFiles([]);
+    apiFetch('/product/categories')
+      .then((res) => { if (Array.isArray(res.data)) setCategories(res.data); })
+      .catch(() => {});
     if (item) {
       setCurrentItem(item);
       setFormData({
         itemName: item.itemName || '',
         sku: item.sku || '',
         category: item.category || 'fruits',
+        customCategory: '',
         price: item.price !== undefined ? item.price.toString() : '',
+        priceQty: String(priceQtyOf(item)),
         unit: unitOf(item),
         gstIncluded: !!item.gstIncluded,
-        stock: item.stock !== undefined ? item.stock.toString() : '',
+        stock: item.stock !== undefined ? String(toPacks(item.stock, item)) : '',
       });
     } else {
       setCurrentItem(null);
@@ -183,7 +196,9 @@ export default function Stock() {
         itemName: '',
         sku: '',
         category: 'fruits',
+        customCategory: '',
         price: '',
+        priceQty: '1',
         unit: 'pcs',
         gstIncluded: false,
         stock: '',
@@ -210,16 +225,26 @@ export default function Stock() {
       toast.error('Please fill all required fields');
       return;
     }
+    const category = (formData.category === CUSTOM ? formData.customCategory : formData.category).trim().toLowerCase();
+    if (!category) {
+      toast.error('Enter a category name');
+      return;
+    }
+    if (!(Number(formData.priceQty) > 0)) {
+      toast.error('Quantity must be greater than 0');
+      return;
+    }
 
     setSubmitting(true);
     const payload = new FormData();
     payload.append('itemName', formData.itemName.trim());
     if (!currentItem) payload.append('sku', formData.sku.trim().toUpperCase());
-    payload.append('category', formData.category);
+    payload.append('category', category);
     payload.append('price', formData.price);
+    payload.append('priceQty', formData.priceQty);
     payload.append('unit', formData.unit);
     payload.append('gstIncluded', formData.gstIncluded ? 'true' : 'false');
-    payload.append('stock', formData.stock);
+    payload.append('stock', String(fromPacks(formData.stock, formData)));
     
     imageFiles.forEach(file => {
       payload.append('images', file);
@@ -341,12 +366,12 @@ export default function Stock() {
                       <td className="p-5 text-sm text-gray-600 font-mono">{item.sku}</td>
                       <td className="p-5 text-sm font-medium text-gray-900">{item.itemName}</td>
                       <td className="p-5 text-sm text-gray-600 capitalize">{item.category}</td>
-                      <td className="p-5 text-sm font-semibold text-emerald-600">₹{item.price?.toLocaleString()}{unitOf(item) !== 'pcs' && <span className="text-xs font-normal text-gray-400"> /{unitOf(item)}</span>}<span className={`block mt-1 w-fit px-2 py-0.5 rounded-full text-[10px] font-semibold ${item.gstIncluded ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}>{item.gstIncluded ? 'Incl. GST' : '+5% GST'}</span></td>
+                      <td className="p-5 text-sm font-semibold text-emerald-600">₹{item.price?.toLocaleString()}{perLabel(item) && <span className="text-xs font-normal text-gray-400"> {perLabel(item)}</span>}<span className={`block mt-1 w-fit px-2 py-0.5 rounded-full text-[10px] font-semibold ${item.gstIncluded ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}>{item.gstIncluded ? 'Incl. GST' : '+5% GST'}</span></td>
                       <td className="p-5">
                         {isLowStock(item) ? (
-                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 text-amber-800 text-xs font-medium"><AlertCircle size={14}/> {formatQty(item.stock, unitOf(item))} left</span>
+                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-100 text-amber-800 text-xs font-medium"><AlertCircle size={14}/> {formatStock(item.stock, item)} left</span>
                         ) : (
-                          <span className="inline-flex items-center px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-medium">{formatQty(item.stock, unitOf(item))} in stock</span>
+                          <span className="inline-flex items-center px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-medium">{formatStock(item.stock, item)} in stock</span>
                         )}
                       </td>
                       {isAdmin && !viewingBranch && (
@@ -355,7 +380,7 @@ export default function Stock() {
                             <div className="flex flex-wrap gap-1.5">
                               {item.branchStocks.map((b) => (
                                 <span key={b.branchId} className="px-2 py-0.5 rounded-md bg-gray-100 text-gray-700 text-xs">
-                                  {b.branchName}: <b>{formatQty(b.stock, unitOf(item))}</b>
+                                  {b.branchName}: <b>{formatStock(b.stock, item)}</b>
                                 </span>
                               ))}
                             </div>
@@ -403,7 +428,7 @@ export default function Stock() {
                     <div className="flex-1 min-w-0 pt-0.5">
                       <div className="flex justify-between items-start gap-2">
                         <h3 className="font-bold text-gray-900 leading-tight truncate">{item.itemName}</h3>
-                        <div className="font-bold text-emerald-600 flex-shrink-0 text-right">₹{item.price?.toLocaleString()}<span className={`block mt-0.5 px-2 py-0.5 rounded-full text-[10px] font-semibold ${item.gstIncluded ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}>{item.gstIncluded ? 'Incl. GST' : '+5% GST'}</span></div>
+                        <div className="font-bold text-emerald-600 flex-shrink-0 text-right">₹{item.price?.toLocaleString()}{perLabel(item) && <span className="text-xs font-normal text-gray-400">{perLabel(item)}</span>}<span className={`block mt-0.5 px-2 py-0.5 rounded-full text-[10px] font-semibold ${item.gstIncluded ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}>{item.gstIncluded ? 'Incl. GST' : '+5% GST'}</span></div>
                       </div>
                       <p className="text-xs text-gray-500 font-mono mt-1">{item.sku}</p>
                       <p className="text-xs text-gray-400 capitalize mt-0.5">{item.category}</p>
@@ -418,11 +443,11 @@ export default function Stock() {
                     <div>
                       {isLowStock(item) ? (
                         <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-50 text-amber-700 border border-amber-200 text-[11px] font-bold tracking-wide">
-                          <AlertCircle size={12}/> {formatQty(item.stock, unitOf(item)).toUpperCase()} LEFT
+                          <AlertCircle size={12}/> {formatStock(item.stock, item).toUpperCase()} LEFT
                         </span>
                       ) : (
                         <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-bold tracking-wide">
-                          {formatQty(item.stock, unitOf(item)).toUpperCase()} IN STOCK
+                          {formatStock(item.stock, item).toUpperCase()} IN STOCK
                         </span>
                       )}
                     </div>
@@ -504,12 +529,12 @@ export default function Stock() {
                       <div className="flex-1 min-w-0">
                         <div className="font-medium text-gray-900 truncate">{item.itemName}</div>
                         <div className={`text-xs ${over ? 'text-red-600' : 'text-gray-500'}`}>
-                          {over ? 'Exceeds available: ' : 'Available: '}{formatQty(available, unitOf(item))}
+                          {over ? 'Exceeds available: ' : 'Available: '}{formatStock(available, item)}
                         </div>
                       </div>
-                      <input type="number" min="0" step={unitOf(item) === 'pcs' ? '1' : '0.001'} value={bulk.qty[item.sku] ?? ''}
+                      <input type="number" min="0" step={unitOf(item) === 'pcs' && priceQtyOf(item) === 1 ? '1' : '0.001'} value={bulk.qty[item.sku] ?? ''}
                         onChange={(e) => setBulk({ ...bulk, qty: { ...bulk.qty, [item.sku]: e.target.value } })}
-                        placeholder={unitOf(item)}
+                        placeholder={stockUnitLabel(item)}
                         aria-label={`Quantity for ${item.itemName}`}
                         className={`w-28 h-10 px-3 border outline-none ${over ? 'border-red-400' : 'border-gray-200'}`} />
                       <button type="button" onClick={() => toggleSelect(item)} aria-label={`Remove ${item.itemName}`} className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50"><X size={16} /></button>
@@ -537,7 +562,7 @@ export default function Stock() {
             <div className="flex items-start justify-between">
               <div>
                 <h2 className="text-xl font-bold text-gray-900">Transfer Stock</h2>
-                <p className="text-sm text-gray-500">{transferItem.itemName} · Central: {formatQty(transferItem.centralStock ?? transferItem.stock, unitOf(transferItem))}</p>
+                <p className="text-sm text-gray-500">{transferItem.itemName} · Central: {formatStock(transferItem.centralStock ?? transferItem.stock, transferItem)}</p>
               </div>
               <button type="button" onClick={() => setTransferItem(null)} className="p-2 rounded-xl hover:bg-gray-100 text-gray-400"><X size={20} /></button>
             </div>
@@ -552,12 +577,12 @@ export default function Stock() {
               {branches.length === 0 && <option value="">No branches yet</option>}
               {branches.map((b) => {
                 const held = transferItem.branchStocks?.find((x) => x.branchId === b._id)?.stock || 0;
-                return <option key={b._id} value={b._id}>{b.name} (has {formatQty(held, unitOf(transferItem))})</option>;
+                return <option key={b._id} value={b._id}>{b.name} (has {formatStock(held, transferItem)})</option>;
               })}
             </select>
-            <input type="number" min="0" step={unitOf(transferItem) === 'pcs' ? '1' : '0.001'} value={transfer.quantity}
+            <input type="number" min="0" step={unitOf(transferItem) === 'pcs' && priceQtyOf(transferItem) === 1 ? '1' : '0.001'} value={transfer.quantity}
               onChange={(e) => setTransfer({ ...transfer, quantity: e.target.value })}
-              placeholder={`Quantity (${unitOf(transferItem)})`}
+              placeholder={`Quantity (${stockUnitLabel(transferItem)})`}
               className="w-full h-12 px-4 rounded-xl border border-gray-200 focus:border-emerald-500 outline-none" />
             <button type="submit" disabled={submitting}
               className="w-full h-12 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-white font-semibold disabled:opacity-60">
@@ -622,12 +647,26 @@ export default function Stock() {
                           onChange={handleInputChange} 
                           className="w-full h-12 px-4 rounded-xl border border-gray-200 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 outline-none bg-white capitalize appearance-none shadow-sm cursor-pointer"
                         >
-                          {VALID_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                          {[...new Set([...categories, formData.category])].filter((c) => c && c !== CUSTOM).map(c => <option key={c} value={c}>{c}</option>)}
+                          <option value={CUSTOM}>+ Custom category…</option>
                         </select>
                         <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
                           <Plus size={16} className="rotate-45" />
                         </div>
                       </div>
+                      {formData.category === CUSTOM && (
+                        <input
+                          type="text"
+                          name="customCategory"
+                          value={formData.customCategory}
+                          onChange={handleInputChange}
+                          required
+                          maxLength={50}
+                          autoFocus
+                          placeholder="e.g. Ice Creams"
+                          className="mt-2 w-full h-12 px-4 rounded-xl border border-gray-200 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 outline-none transition-all placeholder:text-gray-400 shadow-sm"
+                        />
+                      )}
                     </div>
                   </div>
 
@@ -644,7 +683,21 @@ export default function Stock() {
                       </select>
                     </div>
                     <div>
-                      <label className="block text-sm font-semibold mb-2 text-gray-700">Price (₹ per {formData.unit})</label>
+                      <label className="block text-sm font-semibold mb-2 text-gray-700">Quantity ({formData.unit})</label>
+                      <input
+                        type="number"
+                        name="priceQty"
+                        value={formData.priceQty}
+                        onChange={handleInputChange}
+                        required
+                        min="0.001"
+                        step={formData.unit === 'pcs' ? '1' : '0.001'}
+                        placeholder="e.g. 500"
+                        className="w-full h-12 px-4 rounded-xl border border-gray-200 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 outline-none transition-all shadow-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-semibold mb-2 text-gray-700">Price (₹ per {formatQty(Number(formData.priceQty) > 0 ? formData.priceQty : 1, formData.unit)}{formData.unit === 'pcs' ? ' pcs' : ''})</label>
                       <input 
                         type="number" 
                         name="price" 
@@ -657,7 +710,7 @@ export default function Stock() {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-semibold mb-2 text-gray-700">{currentItem ? 'Stock' : 'Initial Stock'} ({formData.unit})</label>
+                      <label className="block text-sm font-semibold mb-2 text-gray-700">{currentItem ? 'Stock' : 'Initial Stock'} ({stockUnitLabel(formData)})</label>
                       <input 
                         type="number" 
                         name="stock" 
@@ -665,7 +718,7 @@ export default function Stock() {
                         onChange={handleInputChange} 
                         required 
                         min="0" 
-                        step={formData.unit === 'pcs' ? '1' : '0.001'}
+                        step={formData.unit === 'pcs' && priceQtyOf(formData) === 1 ? '1' : '0.001'}
                         className="w-full h-12 px-4 rounded-xl border border-gray-200 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 outline-none transition-all shadow-sm" 
                       />
                     </div>
@@ -688,8 +741,13 @@ export default function Stock() {
                       {Number(formData.price) > 0 && (
                         <span className="block text-xs font-semibold text-emerald-700 mt-1.5">
                           {formData.gstIncluded
-                            ? `Customer pays ₹${Number(formData.price).toLocaleString('en-IN')} per ${formData.unit} (includes ₹${((Number(formData.price) * 5) / 105).toFixed(2)} GST)`
-                            : `Customer pays ₹${(Number(formData.price) * 1.05).toFixed(2)} per ${formData.unit} (₹${Number(formData.price).toLocaleString('en-IN')} + ₹${(Number(formData.price) * 0.05).toFixed(2)} GST)`}
+                            ? `Customer pays ₹${Number(formData.price).toLocaleString('en-IN')} per ${formatQty(Number(formData.priceQty) > 0 ? formData.priceQty : 1, formData.unit)} (includes ₹${((Number(formData.price) * 5) / 105).toFixed(2)} GST)`
+                            : `Customer pays ₹${(Number(formData.price) * 1.05).toFixed(2)} per ${formatQty(Number(formData.priceQty) > 0 ? formData.priceQty : 1, formData.unit)} (₹${Number(formData.price).toLocaleString('en-IN')} + ₹${(Number(formData.price) * 0.05).toFixed(2)} GST)`}
+                        </span>
+                      )}
+                      {Number(formData.price) > 0 && Number(formData.priceQty) > 0 && Number(formData.priceQty) !== 1 && (
+                        <span className="block text-xs text-gray-500 mt-1">
+                          Billing charges ₹{Number((Number(formData.price) / Number(formData.priceQty)).toFixed(4))} per {formData.unit}, so any quantity can be sold.
                         </span>
                       )}
                     </span>

@@ -88,7 +88,7 @@ export default function SideBar({ collapsed, setCollapsed, mobileOpen, setMobile
   return (
     <>
       {/* Desktop Sidebar */}
-      <aside className={`hidden md:flex flex-col bg-emerald-800 fixed inset-y-0 left-0 z-30 transition-all duration-300 ease-in-out ${collapsed ? 'w-20' : 'w-72'}`}>
+      <aside className={`hidden md:flex flex-col bg-emerald-800 fixed inset-y-0 left-0 z-50 transition-all duration-300 ease-in-out ${collapsed ? 'w-20' : 'w-72'}`}>
         <div className="relative h-20 flex items-center px-5">
           {brand(!collapsed)}
           <button
