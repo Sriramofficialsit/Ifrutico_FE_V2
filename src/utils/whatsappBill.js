@@ -5,7 +5,7 @@ const inr = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
 export const buildBillMessage = ({ customerName, invoice, items, subTotal, gstAmount, total, paymentMethod, gstNumber }) => {
   const line = '━━━━━━━━━━━━━━━━━━';
   const rows = items.map((it, i) =>
-    `${i + 1}. *${it.name}*\n    ${it.qty} × ${inr(it.price)}${it.per || ''}  =  ${inr(it.total)}`
+    `${i + 1}. *${it.name}*\n    ${it.qty} × ${inr(it.price)}  =  ${inr(it.total)}`
   );
 
   return [
