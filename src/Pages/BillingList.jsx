@@ -231,7 +231,7 @@ export default function BillingList() {
     const text = buildBillMessage({
       customerName: bill.customerName,
       invoice: bill.invoiceNumber,
-      items: bill.products.map((p) => ({ name: p.itemName, qty: formatQty(p.quantity, p.unit), price: p.price, per: perLabel(p), total: p.total })),
+      items: bill.products.map((p) => ({ name: p.itemName, qty: formatQty(p.quantity, p.unit), price: p.price, per: perLabel(p), quantity: p.quantity, unit: p.unit, priceQty: p.priceQty, total: p.total })),
       subTotal: bill.subTotal,
       gstAmount: bill.gstAmount,
       total: bill.totalAmount,

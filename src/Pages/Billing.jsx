@@ -341,7 +341,7 @@ export default function Billing() {
         paymentMethod,
         emailSent,
         date: new Date().toLocaleDateString(),
-        items: billItems.map(b => ({ name: b.item.itemName, qty: formatQty(b.quantity, unitOf(b.item)), price: b.item.price, per: perLabel(b.item), total: b.subtotal }))
+        items: billItems.map(b => ({ name: b.item.itemName, qty: formatQty(b.quantity, unitOf(b.item)), price: b.item.price, per: perLabel(b.item), quantity: b.quantity, unit: unitOf(b.item), priceQty: b.item.priceQty, total: b.subtotal }))
       });
       setCheckout('done');
       clearBill();
