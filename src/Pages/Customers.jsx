@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Search, X, Phone, Mail, FileText, Download, Loader2, ChevronLeft, ChevronRight, Users, IndianRupee, Receipt } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { apiFetch, downloadInvoicePdf } from '../utils/api';
+import ReportDialog from '../Components/ReportDialog';
 import { formatQty } from '../utils/units';
 
 const inr = (n) => `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
@@ -31,6 +32,7 @@ export default function Customers() {
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [downloadingId, setDownloadingId] = useState(null);
+  const [reportOpen, setReportOpen] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(() => { setDebouncedSearch(search.trim()); setPage(1); }, 300);
@@ -78,10 +80,26 @@ export default function Customers() {
   return (
     <div className="animate-fade-in-up">
       <div className="mx-auto max-w-screen-2xl space-y-8 md:space-y-10">
-        <div className="space-y-2">
-          <h1 className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight text-gray-900">Customers</h1>
-          <p className="text-base sm:text-lg text-gray-600">Everyone you've billed — saved automatically, with their order history</p>
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+          <div className="space-y-2">
+            <h1 className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight text-gray-900">Customers</h1>
+            <p className="text-base sm:text-lg text-gray-600">Everyone you've billed — saved automatically, with their order history</p>
+          </div>
+          <button type="button" onClick={() => setReportOpen(true)}
+            className="self-start sm:self-auto inline-flex items-center gap-2 h-11 px-5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold shadow-lg">
+            <Download size={17} /> Download customer list
+          </button>
         </div>
+
+        <ReportDialog
+          open={reportOpen}
+          onClose={() => setReportOpen(false)}
+          kind="customers"
+          endpoint="/customers/report"
+          title="Download customer report"
+          filters={{ search: debouncedSearch }}
+          filterSummary={debouncedSearch ? `Customers matching "${debouncedSearch}"` : ''}
+        />
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 md:gap-6">
           <StatCard label="Customers" value={summary.customers} icon={<Users size={16} />} />

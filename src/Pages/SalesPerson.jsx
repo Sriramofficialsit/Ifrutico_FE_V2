@@ -152,12 +152,14 @@ export default function Salespersons() {
 
       if (!editingPerson) {
         payload.password = formData.password;
-        await apiFetch('/sales/add', { method: 'POST', body: payload });
+        const res = await apiFetch('/sales/add', { method: 'POST', body: payload });
+        if (res.emailSent === false) toast.error(res.message, { duration: 8000 });
+        else toast.success(res.message || 'User added and login details emailed');
       } else {
         await apiFetch(`/sales/update/${editingPerson._id}`, { method: 'PUT', body: payload });
+        toast.success('User updated successfully');
       }
 
-      toast.success(editingPerson ? 'User updated successfully' : 'User added successfully');
       fetchSalespersons(page);
       setIsModalOpen(false);
     } catch (err) {
@@ -449,6 +451,7 @@ export default function Salespersons() {
                           className="w-full h-12 pl-11 pr-4 rounded-2xl border border-gray-200 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 outline-none transition-all shadow-sm" 
                         />
                       </div>
+                      <p className="mt-1.5 ml-1 text-xs text-gray-500">The login email and this password are emailed to the user automatically.</p>
                     </div>
                   )}
 

@@ -8,6 +8,7 @@ import toast from 'react-hot-toast';
 import { createPortal } from 'react-dom';
 import { apiFetch, assetUrl, downloadInvoicePdf } from '../utils/api';
 import { isLowStock, formatQty, formatStock, perLabel } from '../utils/units';
+import { discountLabel, itemsTotal, lineDiscountLabel } from '../utils/gst';
 
 const inr = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
 const fmtDate = (d) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -343,6 +344,7 @@ export default function BranchDetail() {
                       <div>
                         <div className="font-medium text-gray-900">{p.itemName}</div>
                         <div className="text-xs text-gray-500">{formatQty(p.quantity, p.unit)} × {inr(p.price)}{perLabel(p)}{p.gstIncluded ? ' · incl. GST' : ''}</div>
+                        {p.discountAmount > 0 && <div className="text-xs text-emerald-700">{lineDiscountLabel(p)} − {inr(p.discountAmount)}</div>}
                       </div>
                       <div className="font-semibold text-gray-900">{inr(p.total)}</div>
                     </div>
@@ -350,7 +352,14 @@ export default function BranchDetail() {
                 </div>
               </div>
               <div className="pt-4 border-t border-gray-100 space-y-2 text-sm">
-                <div className="flex justify-between text-gray-600"><span>Subtotal</span><span>{inr(viewBill.subTotal)}</span></div>
+                {(viewBill.discountAmount > 0 || viewBill.itemDiscountAmount > 0) && (
+                  <>
+                    <div className="flex justify-between text-gray-600"><span>Items total</span><span>{inr(itemsTotal(viewBill))}</span></div>
+                    {viewBill.itemDiscountAmount > 0 && <div className="flex justify-between text-emerald-700"><span>Item discounts</span><span>− {inr(viewBill.itemDiscountAmount)}</span></div>}
+                    {viewBill.discountAmount > 0 && <div className="flex justify-between text-emerald-700"><span>{discountLabel(viewBill)}</span><span>− {inr(viewBill.discountAmount)}</span></div>}
+                  </>
+                )}
+                <div className="flex justify-between text-gray-600"><span>{viewBill.discountAmount > 0 || viewBill.itemDiscountAmount > 0 ? 'Taxable value' : 'Subtotal'}</span><span>{inr(viewBill.subTotal)}</span></div>
                 <div className="flex justify-between text-gray-600"><span>GST</span><span>{inr(viewBill.gstAmount)}</span></div>
                 <div className="flex justify-between font-bold text-gray-900 text-base"><span>Total</span><span>{inr(viewBill.totalAmount)}</span></div>
                 <div className="flex justify-between text-gray-500 capitalize"><span>Payment</span><span>{viewBill.paymentMethod || 'cash'}</span></div>

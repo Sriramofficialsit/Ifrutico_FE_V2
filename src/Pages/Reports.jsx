@@ -25,7 +25,7 @@ const chartOptions = {
     },
   },
   scales: {
-    y: { grid: { color: '#e5e7eb' }, ticks: { color: '#6b7280' } },
+    y: { grid: { color: 'rgba(148,163,184,0.18)' }, ticks: { color: '#6b7280' } },
     x: { grid: { display: false }, ticks: { color: '#6b7280' } },
   },
 };

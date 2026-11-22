@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useTheme } from '../Context/ThemeContext';
+import SalesAnalytics from '../Components/SalesAnalytics';
 import { Link } from 'react-router-dom';
 import { isLowStock } from '../utils/units';
 import { DollarSign, ShoppingCart, TrendingUp, AlertCircle, ArrowUpRight, Sparkles, Store, Crown, ChevronRight } from 'lucide-react';
@@ -30,7 +32,7 @@ const chartOptions = {
   },
   scales: {
     y: {
-      grid: { color: 'rgba(229,231,235,0.5)' },
+      grid: { color: 'rgba(148,163,184,0.18)' }, // reads on both light and dark cards
       ticks: { color: '#9ca3af', padding: 8, font: { size: 12 } },
       beginAtZero: true,
     },
@@ -123,6 +125,7 @@ function ChartCard({ title, subtitle, children, className = '' }) {
 }
 
 function BranchAnalytics() {
+  const { theme } = useTheme();
   const [days, setDays] = useState(7);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -178,10 +181,10 @@ function BranchAnalytics() {
       },
       donut: {
         labels: branches.map((b) => b.name),
-        datasets: [{ data: branches.map((b) => b.revenue), backgroundColor: branches.map((_, i) => colorOf(i)), borderWidth: 3, borderColor: '#fff', hoverOffset: 8 }],
+        datasets: [{ data: branches.map((b) => b.revenue), backgroundColor: branches.map((_, i) => colorOf(i)), borderWidth: 3, borderColor: theme === 'dark' ? '#111a16' : '#fff', hoverOffset: 8 }],
       },
     };
-  }, [data]);
+  }, [data, theme]);
 
   return (
     <div className="space-y-6 sm:space-y-8">
@@ -442,6 +445,8 @@ export default function Dashboard() {
                 )}
               </div>
             </div>
+
+            <SalesAnalytics />
 
             {user?.role === 'admin' && <BranchAnalytics />}
           </div>

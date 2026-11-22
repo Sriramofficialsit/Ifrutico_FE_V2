@@ -5,7 +5,9 @@ const BIG_UNIT = { g: 'kg', ml: 'ltr' };
 const fmtNum = (n) => (Number.isInteger(n) ? String(n) : String(Number(n.toFixed(3))));
 
 // "16 ltr × ₹255/ltr" or "2 × ₹50": quantity sold × price of one unit
-const qtyRate = ({ quantity, unit, price, priceQty }) => {
+const qtyRate = ({ quantity, unit, price, priceQty, boxes, boxSize, scoops, scoopGrams, total }) => {
+  if (boxes > 0) return `${boxes} box${boxes === 1 ? '' : 'es'} of ${fmtNum(Number(boxSize))} L × ${inr(Number(total) / boxes)}`;
+  if (scoops > 0) return `${scoops} scoop${scoops === 1 ? '' : 's'} of ${fmtNum(Number(scoopGrams))} g × ${inr(Number(total) / scoops)}`;
   let u = unit || 'pcs';
   let qty = Number(quantity) || 0;
   let rate = (Number(price) || 0) / (Number(priceQty) || 1);
@@ -15,10 +17,14 @@ const qtyRate = ({ quantity, unit, price, priceQty }) => {
 
 // items: [{ name, quantity, unit, price, priceQty, total }]
 // Plain text only: emojis get corrupted by wa.me links on some WhatsApp clients.
-export const buildBillMessage = ({ customerName, invoice, items, subTotal, gstAmount, total, paymentMethod, gstNumber }) => {
+export const buildBillMessage = ({ customerName, invoice, items, subTotal, gstAmount, total, paymentMethod, gstNumber, gross, itemDiscountAmount, discountLabel, discountAmount }) => {
+  const hasItemDiscount = Number(itemDiscountAmount) > 0;
+  const hasBillDiscount = Number(discountAmount) > 0;
+  const hasDiscount = hasItemDiscount || hasBillDiscount;
   const line = '━━━━━━━━━━━━━━━━━━';
   const rows = items.map((it, i) =>
-    `${i + 1}. *${it.name}*\n    ${qtyRate(it)}  =  ${inr(it.total)}`
+    `${i + 1}. *${it.name}*\n    ${qtyRate(it)}  =  ${inr(it.total)}` +
+    (Number(it.discountAmount) > 0 ? `\n    ${it.discountLabel || 'Discount'}  -${inr(it.discountAmount)}` : '')
   );
 
   return [
@@ -36,7 +42,10 @@ export const buildBillMessage = ({ customerName, invoice, items, subTotal, gstAm
     line,
     ...rows,
     line,
-    `Subtotal          ${inr(subTotal)}`,
+    ...(hasDiscount ? [`Items total       ${inr(gross)}`] : []),
+    ...(hasItemDiscount ? [`Item discounts    -${inr(itemDiscountAmount)}`] : []),
+    ...(hasBillDiscount ? [`${discountLabel || 'Discount'}    -${inr(discountAmount)}`] : []),
+    `${hasDiscount ? 'Taxable value' : 'Subtotal'}     ${inr(subTotal)}`,
     `GST (5%)          ${inr(gstAmount)}`,
     `*TOTAL PAID    ${inr(total)}*`,
     line,

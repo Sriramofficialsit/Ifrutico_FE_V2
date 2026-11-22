@@ -1,5 +1,7 @@
-import { useEffect } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { NavLink, useNavigate, useLocation } from 'react-router-dom';
+import { BILL_MODE_LIST } from '../utils/billModes';
+import logo from '../LandingApp/images/logo.webp';
 import { useAuth } from '../Context/AuthContext';
 import {
   LayoutDashboard,
@@ -9,7 +11,6 @@ import {
   BarChart3,
   Users,
   Settings,
-  IceCream,
   ChevronLeft,
   ChevronRight,
   Menu,
@@ -21,11 +22,22 @@ import {
   Landmark,
   Contact,
   History,
+  ChevronDown,
+  Megaphone,
+  Mail,
+  TicketPercent,
 } from 'lucide-react';
 
 const menuItems = [
   { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-  { path: '/billing', icon: ReceiptIndianRupee, label: 'Billing' },
+  { path: '/billing', icon: ReceiptIndianRupee, label: 'Billing', children: BILL_MODE_LIST },
+  {
+    path: '/campaigns', icon: Megaphone, label: 'Campaigns', adminOnly: true,
+    children: [
+      { key: 'email', path: '/campaigns', label: 'Email Campaigns', icon: Mail },
+      { key: 'coupons', path: '/campaigns/coupons', label: 'Coupons', icon: TicketPercent },
+    ],
+  },
   { path: '/stock', icon: Package, label: 'Stock' },
   { path: '/bills', icon: FileText, label: 'Billing List', adminOnly: true },
   { path: '/customers', icon: Contact, label: 'Customers', adminOnly: true },
@@ -42,6 +54,11 @@ const menuItems = [
 export default function SideBar({ collapsed, setCollapsed, mobileOpen, setMobileOpen }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+  // Expandable groups (Billing, Campaigns): open while on one of their pages unless the user toggled them
+  const [groupToggle, setGroupToggle] = useState({});
+  const inGroup = (item) => pathname === item.path || pathname.startsWith(`${item.path}/`);
+  const isOpen = (item) => groupToggle[item.path] ?? inGroup(item);
 
   const handleLogout = async () => {
     await logout();
@@ -58,16 +75,58 @@ export default function SideBar({ collapsed, setCollapsed, mobileOpen, setMobile
   // House Green rail: active item is a full pill, inactive items are quiet white-on-green
   const itemClass = (isActive, compact) =>
     `flex items-center gap-4 px-4 py-2.5 rounded-full transition-all duration-200 active:scale-95
-    ${isActive ? 'bg-white text-emerald-500 font-semibold' : 'text-white/70 hover:bg-white/10 hover:text-white'}
+    ${isActive ? 'sb-nav-active bg-white text-emerald-500 font-semibold' : 'text-white/70 hover:bg-white/10 hover:text-white'}
     ${compact ? 'justify-center px-2' : ''}`;
 
-  const brand = (showName = true) => (
-    <div className={`flex items-center gap-3 ${!showName ? 'justify-center w-full' : ''}`}>
-      <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center flex-shrink-0">
-        <IceCream className="w-6 h-6 text-emerald-500" />
+  // Groups (Billing, Campaigns): a parent row that expands into its pages.
+  // The collapsed rail shows the pages as separate icons instead.
+  const renderItem = (item, compact, onNavigate) => {
+    if (!item.children) {
+      return (
+        <NavLink key={item.path} to={item.path} onClick={onNavigate} title={compact ? item.label : undefined} className={({ isActive }) => itemClass(isActive, compact)}>
+          <item.icon size={20} className="flex-shrink-0" />
+          {!compact && <span className="text-sm">{item.label}</span>}
+        </NavLink>
+      );
+    }
+    if (compact) {
+      return item.children.map((c) => (
+        <NavLink key={c.path} to={c.path} end title={`${item.label}: ${c.label}`} className={({ isActive }) => itemClass(isActive, true)}>
+          <c.icon size={20} className="flex-shrink-0" />
+        </NavLink>
+      ));
+    }
+    return (
+      <div key={item.path}>
+        <button type="button" onClick={() => setGroupToggle((g) => ({ ...g, [item.path]: !isOpen(item) }))} aria-expanded={isOpen(item)}
+          className={`w-full ${itemClass(false, false)} ${inGroup(item) ? '!text-white bg-white/10 font-semibold' : ''}`}>
+          <item.icon size={20} className="flex-shrink-0" />
+          <span className="text-sm flex-1 text-left">{item.label}</span>
+          <ChevronDown size={16} className={`transition-transform duration-200 ${isOpen(item) ? 'rotate-180' : ''}`} />
+        </button>
+        <div className={`grid transition-all duration-300 ${isOpen(item) ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
+          <div className="overflow-hidden">
+            <div className="ml-6 mt-1 pl-3 border-l border-white/15 space-y-1">
+              {item.children.map((c) => (
+                <NavLink key={c.path} to={c.path} end onClick={onNavigate}
+                  className={({ isActive }) => `flex items-center gap-3 px-3 py-2 rounded-full text-sm transition-all duration-200 active:scale-95 ${isActive ? 'sb-nav-active bg-white text-emerald-500 font-semibold' : 'text-white/70 hover:bg-white/10 hover:text-white'}`}>
+                  <c.icon size={17} className="flex-shrink-0" />
+                  <span>{c.label}</span>
+                </NavLink>
+              ))}
+            </div>
+          </div>
+        </div>
       </div>
-      {showName && <span className="text-xl font-semibold tracking-tight text-white">IFRUTICO</span>}
-    </div>
+    );
+  };
+
+  // Company logo on a white card (the logo is green, so it needs a light backing on the green sidebar)
+  const brand = (full = true) => (
+    <NavLink to="/dashboard" aria-label="Ifrutico dashboard home"
+      className={`sb-keep-light flex items-center justify-center bg-white rounded-xl shadow-sm hover:shadow transition-shadow flex-shrink-0 ${full ? 'px-3 py-1.5' : 'w-12 h-12 mx-auto p-1'}`}>
+      <img src={logo} alt="Ifrutico" className={full ? 'h-11 w-auto object-contain' : 'w-full h-full object-contain'} />
+    </NavLink>
   );
 
   const userCard = (
@@ -88,7 +147,7 @@ export default function SideBar({ collapsed, setCollapsed, mobileOpen, setMobile
   return (
     <>
       {/* Desktop Sidebar */}
-      <aside className={`hidden md:flex flex-col bg-emerald-800 fixed inset-y-0 left-0 z-50 transition-all duration-300 ease-in-out ${collapsed ? 'w-20' : 'w-72'}`}>
+      <aside className={`sb-sidebar hidden md:flex flex-col bg-emerald-800 fixed inset-y-0 left-0 z-50 transition-all duration-300 ease-in-out ${collapsed ? 'w-20' : 'w-72'}`}>
         <div className="relative h-20 flex items-center px-5">
           {brand(!collapsed)}
           <button
@@ -101,12 +160,7 @@ export default function SideBar({ collapsed, setCollapsed, mobileOpen, setMobile
         </div>
 
         <nav className="flex-1 pt-4 px-3 space-y-1 overflow-y-auto">
-          {visibleItems.map((item) => (
-            <NavLink key={item.path} to={item.path} title={collapsed ? item.label : undefined} className={({ isActive }) => itemClass(isActive, collapsed)}>
-              <item.icon size={20} className="flex-shrink-0" />
-              {!collapsed && <span className="text-sm">{item.label}</span>}
-            </NavLink>
-          ))}
+          {visibleItems.map((item) => renderItem(item, collapsed))}
         </nav>
 
         {!collapsed && <div className="p-4">{userCard}</div>}
@@ -115,7 +169,7 @@ export default function SideBar({ collapsed, setCollapsed, mobileOpen, setMobile
       {/* Mobile Drawer */}
       <div className={`md:hidden fixed inset-0 z-50 transition-all duration-300 ease-in-out ${mobileOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}>
         <div className="absolute inset-0 bg-black/40" onClick={() => setMobileOpen(false)} />
-        <aside className={`absolute left-0 top-0 h-full w-72 sm:w-80 bg-emerald-800 flex flex-col transition-transform duration-300 ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <aside className={`sb-sidebar absolute left-0 top-0 h-full w-72 sm:w-80 bg-emerald-800 flex flex-col transition-transform duration-300 ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
           <div className="h-20 flex items-center justify-between px-5">
             {brand()}
             <button onClick={() => setMobileOpen(false)} className="p-2 text-white/70 hover:text-white hover:bg-white/10" aria-label="Close menu">
@@ -124,12 +178,7 @@ export default function SideBar({ collapsed, setCollapsed, mobileOpen, setMobile
           </div>
 
           <nav className="flex-1 pt-4 px-3 space-y-1 overflow-y-auto">
-            {visibleItems.map((item) => (
-              <NavLink key={item.path} to={item.path} onClick={() => setMobileOpen(false)} className={({ isActive }) => itemClass(isActive, false)}>
-                <item.icon size={20} className="flex-shrink-0" />
-                <span className="text-sm">{item.label}</span>
-              </NavLink>
-            ))}
+            {visibleItems.map((item) => renderItem(item, false, () => setMobileOpen(false)))}
           </nav>
 
           <div className="p-4">{userCard}</div>

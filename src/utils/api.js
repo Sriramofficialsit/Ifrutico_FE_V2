@@ -61,3 +61,25 @@ export async function downloadInvoicePdf(billId, invoiceNumber) {
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
+
+/**
+ * Downloads a generated report (PDF / CSV) from the API and saves it with the server's file name.
+ * path is relative to /api, e.g. "/bill/report?from=2026-11-01&to=2026-11-22&format=pdf".
+ */
+export async function downloadReport(path, fallbackName = 'report') {
+  const res = await fetch(`/api${path.startsWith('/') ? path : `/${path}`}`, { credentials: 'include' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || `Could not download the report (${res.status})`);
+  }
+  const name = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '')?.[1] || fallbackName;
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  return name;
+}

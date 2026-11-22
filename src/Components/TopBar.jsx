@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
-import { Clock, LogOut, Menu } from 'lucide-react';
+import { Clock, LogOut, Menu, Sun, Moon } from 'lucide-react';
 import { useAuth } from '../Context/AuthContext';
+import { useTheme } from '../Context/ThemeContext';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 export default function TopBar({ collapsed, mobileOpen, setMobileOpen }) {
-  const [time, setTime] = useState('');
   const { user, logout } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -20,6 +21,8 @@ export default function TopBar({ collapsed, mobileOpen, setMobileOpen }) {
     if (path.includes('login-activity')) return 'Login Activity';
     if (path.includes('team'))       return 'Branch Management';
     if (path.includes('menu-leads')) return 'Menu Leads';
+    if (path.includes('coupons'))    return 'Coupons';
+    if (path.includes('campaigns'))  return 'Email Campaigns';
     if (path.includes('settings'))   return 'Settings';
     return 'Dashboard';
   };
@@ -28,17 +31,6 @@ export default function TopBar({ collapsed, mobileOpen, setMobileOpen }) {
     await logout();
     navigate('/', { replace: true });
   };
-
-  useEffect(() => {
-    const updateTime = () => {
-      setTime(new Date().toLocaleTimeString('en-IN', {
-        hour: '2-digit', minute: '2-digit', hour12: true,
-      }));
-    };
-    updateTime();
-    const interval = setInterval(updateTime, 30000);
-    return () => clearInterval(interval);
-  }, []);
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -49,7 +41,7 @@ export default function TopBar({ collapsed, mobileOpen, setMobileOpen }) {
 
   return (
     <header
-      className={`fixed right-0 top-0 z-40 h-14 sm:h-16 md:h-20 bg-white transition-all duration-300 left-0 ${collapsed ? 'md:left-20' : 'md:left-72'}`}
+      className={`sb-topbar fixed right-0 top-0 z-40 h-14 sm:h-16 md:h-20 transition-all duration-300 left-0 ${collapsed ? 'md:left-20' : 'md:left-72'}`}
       style={{ boxShadow: 'var(--sb-nav-shadow, 0 1px 3px rgba(0,0,0,.1), 0 2px 2px rgba(0,0,0,.06), 0 0 2px rgba(0,0,0,.07))' }}
     >
       <div className="mx-auto h-full max-w-screen-2xl pr-4 sm:pr-6 lg:pr-8 pl-4 sm:pl-6 lg:pl-8 flex items-center justify-between">
@@ -63,20 +55,29 @@ export default function TopBar({ collapsed, mobileOpen, setMobileOpen }) {
           >
             <Menu size={20} />
           </button>
-          <h1 className="text-xl sm:text-2xl tracking-tight" style={{ color: '#006241', fontWeight: 600 }}>
+          <h1 className="sb-topbar-title text-xl sm:text-2xl tracking-tight font-semibold">
             {getPageTitle()}
           </h1>
         </div>
 
         {/* Right — time + user */}
         <div className="flex items-center gap-3 sm:gap-5">
-          <div className="hidden sm:flex items-center gap-2.5 px-4 py-2 rounded-full bg-emerald-100 text-[11px] uppercase tracking-widest font-bold text-emerald-600">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-60"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+          <button
+            type="button"
+            onClick={toggleTheme}
+            className="sb-theme-switch"
+            role="switch"
+            aria-checked={theme === 'dark'}
+            aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+            title={theme === 'dark' ? 'Light theme' : 'Dark theme'}
+          >
+            <Sun size={14} aria-hidden="true" />
+            <Moon size={14} aria-hidden="true" />
+            <span className="sb-theme-knob" aria-hidden="true">
+              {theme === 'dark' ? <Moon size={15} /> : <Sun size={15} />}
             </span>
-            Live • {time}
-          </div>
+          </button>
+          <LiveClock />
 
           <div className="flex items-center gap-3">
             <div className="text-right hidden md:block">
@@ -102,5 +103,56 @@ export default function TopBar({ collapsed, mobileOpen, setMobileOpen }) {
         </div>
       </div>
     </header>
+  );
+}
+
+// Ticking India-time clock: re-renders on every real second boundary (no drift), seconds animate in,
+// and only this small component updates — not the whole top bar.
+const IST = 'Asia/Kolkata';
+const partsOf = (d) => {
+  const t = new Intl.DateTimeFormat('en-IN', { timeZone: IST, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }).formatToParts(d);
+  const get = (type) => t.find((p) => p.type === type)?.value || '';
+  return {
+    hm: `${get('hour')}:${get('minute')}`,
+    ss: get('second'),
+    ampm: get('dayPeriod').toUpperCase(),
+    date: d.toLocaleDateString('en-IN', { timeZone: IST, weekday: 'short', day: '2-digit', month: 'short' }),
+  };
+};
+
+function LiveClock() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    let timer;
+    const tick = () => {
+      setNow(new Date());
+      timer = setTimeout(tick, 1000 - (Date.now() % 1000) + 5); // land just after each new second
+    };
+    timer = setTimeout(tick, 1000 - (Date.now() % 1000) + 5);
+    // Catch up immediately when the tab becomes visible again (browsers throttle background timers)
+    const onVisible = () => document.visibilityState === 'visible' && setNow(new Date());
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { clearTimeout(timer); document.removeEventListener('visibilitychange', onVisible); };
+  }, []);
+
+  const p = partsOf(now);
+  return (
+    <div className="sb-clock flex items-center gap-2 sm:gap-3 pl-2.5 pr-3 sm:pl-3 sm:pr-4 h-9 sm:h-10 rounded-full" role="timer" aria-live="off" aria-label={`${p.date}, ${p.hm}:${p.ss} ${p.ampm} India time`}>
+      <span className="flex items-center gap-1.5">
+        <span className="relative flex h-2 w-2">
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-60" />
+          <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+        </span>
+        <span className="hidden sm:inline text-[10px] font-extrabold uppercase tracking-[0.18em] text-emerald-600">Live</span>
+      </span>
+      <span className="hidden lg:inline text-xs font-semibold text-gray-500 whitespace-nowrap">{p.date}</span>
+      <span className="hidden lg:inline w-px h-4 bg-gray-300" aria-hidden="true" />
+      <span className="flex items-baseline gap-1 font-bold tabular-nums text-gray-900 whitespace-nowrap">
+        <span className="text-sm sm:text-[15px] tracking-tight">{p.hm}</span>
+        <span key={p.ss} className="sb-clock-sec text-xs text-emerald-600">:{p.ss}</span>
+        <span className="text-[10px] font-bold text-gray-500 ml-0.5">{p.ampm}</span>
+        <span className="hidden xl:inline text-[10px] font-semibold text-gray-400 ml-1">IST</span>
+      </span>
+    </div>
   );
 }

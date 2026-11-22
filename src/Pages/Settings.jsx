@@ -1,8 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Save, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { apiFetch } from '../utils/api';
 import { createPortal } from 'react-dom';
+import { useAuth } from '../Context/AuthContext';
+import BillingUnitsCard from '../Components/BillingUnitsCard';
+import PrintSettingsCard from '../Components/PrintSettingsCard';
 
 const defaultForm = {
   shopName: '',
@@ -18,10 +21,16 @@ const defaultForm = {
 };
 
 export default function Settings() {
+  const { user } = useAuth();
   const [formData, setFormData] = useState(defaultForm);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
+  // Shop details shown on the bill print preview (updates as the form is edited)
+  const previewShop = useMemo(() => ({
+    shopName: formData.shopName, address: formData.address, phoneNumber: formData.phoneNumber,
+    gstNumber: formData.gstNumber, openingHours: formData.openingHours,
+  }), [formData.shopName, formData.address, formData.phoneNumber, formData.gstNumber, formData.openingHours]);
 
   useEffect(() => {
     apiFetch('/settings')
@@ -132,7 +141,7 @@ export default function Settings() {
 
   return (
     <div className="animate-fade-in-up">
-      <div className="mx-auto max-w-4xl space-y-8 md:space-y-10">
+      <div className="mx-auto max-w-5xl space-y-8 md:space-y-10">
         <div className="space-y-2">
           <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold tracking-tight text-gray-900">Settings</h1>
           <p className="text-base sm:text-lg text-gray-600">Manage your shop details and preferences</p>
@@ -218,6 +227,10 @@ export default function Settings() {
             </button>
           </div>
         </form>
+
+        <div className="mt-8"><PrintSettingsCard shop={previewShop} /></div>
+
+        {user?.role === 'admin' && <div className="mt-8"><BillingUnitsCard /></div>}
       </div>
 
       {/* Confirm Modal */}

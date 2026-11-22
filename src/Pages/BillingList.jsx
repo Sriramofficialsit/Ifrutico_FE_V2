@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import toast from 'react-hot-toast';
 import { buildBillMessage } from '../utils/whatsappBill';
 import { formatQty, perLabel } from '../utils/units';
+import { discountLabel, itemsTotal, lineDiscountLabel } from '../utils/gst';
 import {
   Eye, Printer, Send, X, ChevronLeft, ChevronRight, Banknote, Smartphone, CreditCard, Mail, Phone,
   Download, Loader2, Search, Copy, Receipt, IndianRupee, TrendingUp, Store, SearchX, Trash2, AlertTriangle,
@@ -9,6 +10,24 @@ import {
 import DOMPurify from 'dompurify';
 import { apiFetch, downloadInvoicePdf } from '../utils/api';
 import { createPortal } from 'react-dom';
+import { printReceipt } from '../utils/receipt';
+import { BILL_MODES } from '../utils/billModes';
+import ReportDialog from '../Components/ReportDialog';
+
+const TYPES = [{ id: 'all', label: 'All types' }, ...Object.values(BILL_MODES).map((m) => ({ id: m.key, label: m.label }))];
+
+// Retail / Events & Functions / Stalls chip (old bills without a type are retail)
+function TypeChip({ type }) {
+  const m = BILL_MODES[type] || BILL_MODES.retail;
+  const tone = m.key === 'event' ? 'bg-violet-50 text-violet-700 border-violet-200' : m.key === 'stall' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-gray-50 text-gray-600 border-gray-200';
+  return <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-semibold ${tone}`}><m.icon size={11} /> {m.label}</span>;
+}
+
+// "3 boxes of 2 L", "4 scoops of 75 g", or the plain quantity × price
+const lineDetail = (p, inr) =>
+  p.boxes > 0 ? `${p.boxes} box${p.boxes === 1 ? '' : 'es'} of ${formatQty(p.boxSize)} L (${formatQty(p.quantity, p.unit)})`
+    : p.scoops > 0 ? `${p.scoops} scoop${p.scoops === 1 ? '' : 's'} of ${formatQty(p.scoopGrams)} g (${formatQty(p.quantity, p.unit)})`
+    : `${formatQty(p.quantity, p.unit)} × ${inr(p.price)}${perLabel(p)}`;
 
 const LIMIT = 12;
 const inr = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
@@ -113,6 +132,7 @@ export default function BillingList() {
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [payment, setPayment] = useState('all');
+  const [billType, setBillType] = useState('all');
   const [range, setRange] = useState('all');
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
@@ -124,6 +144,7 @@ export default function BillingList() {
   const [deleteBill, setDeleteBill] = useState(null); // bill awaiting delete confirmation
   const [restock, setRestock] = useState(true);
   const [deleting, setDeleting] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
   const deleteRef = useRef(null);
   useEffect(() => { deleteRef.current = deleteBill; }, [deleteBill]);
   const searchRef = useRef(null);
@@ -141,6 +162,7 @@ export default function BillingList() {
     const qs = new URLSearchParams({ page: p, limit: LIMIT });
     if (search) qs.set('search', search);
     if (payment !== 'all') qs.set('payment', payment);
+    if (billType !== 'all') qs.set('type', billType);
     const from = rangeStart(range);
     if (from) qs.set('from', from);
     apiFetch(`/bill/fetch?${qs}`)
@@ -157,7 +179,7 @@ export default function BillingList() {
         setLoading(false);
         setFetching(false);
       });
-  }, [search, payment, range]);
+  }, [search, payment, range, billType]);
 
   useEffect(() => { fetchBills(1); }, [fetchBills]);
 
@@ -200,8 +222,8 @@ export default function BillingList() {
     return [...map.entries()];
   }, [bills]);
 
-  const hasFilters = search || payment !== 'all' || range !== 'all';
-  const clearFilters = () => { setSearchInput(''); setSearch(''); setPayment('all'); setRange('all'); };
+  const hasFilters = search || payment !== 'all' || range !== 'all' || billType !== 'all';
+  const clearFilters = () => { setSearchInput(''); setSearch(''); setPayment('all'); setRange('all'); setBillType('all'); };
 
   const askDelete = (bill) => { setRestock(true); setDeleteBill(bill); };
 
@@ -231,10 +253,14 @@ export default function BillingList() {
     const text = buildBillMessage({
       customerName: bill.customerName,
       invoice: bill.invoiceNumber,
-      items: bill.products.map((p) => ({ name: p.itemName, qty: formatQty(p.quantity, p.unit), price: p.price, per: perLabel(p), quantity: p.quantity, unit: p.unit, priceQty: p.priceQty, total: p.total })),
+      items: bill.products.map((p) => ({ name: p.itemName, qty: formatQty(p.quantity, p.unit), price: p.price, per: perLabel(p), quantity: p.quantity, unit: p.unit, priceQty: p.priceQty, total: p.total, boxes: p.boxes, boxSize: p.boxSize, scoops: p.scoops, scoopGrams: p.scoopGrams, discountAmount: p.discountAmount, discountLabel: lineDiscountLabel(p) })),
       subTotal: bill.subTotal,
       gstAmount: bill.gstAmount,
       total: bill.totalAmount,
+      gross: itemsTotal(bill),
+      itemDiscountAmount: bill.itemDiscountAmount,
+      discountLabel: discountLabel(bill),
+      discountAmount: bill.discountAmount,
       paymentMethod: getPaymentText(bill.paymentMethod),
       gstNumber: settings?.gstNumber,
     });
@@ -256,60 +282,25 @@ export default function BillingList() {
   };
 
   const handlePrint = (bill) => {
-    const escape = (str) => String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    const win = window.open('', '_blank');
-
-    const shopName = settings?.shopName || 'Ifrutico';
-    const shopAddress = settings?.address || '';
-    const shopGst = settings?.gstNumber || '';
-    const openingHours = settings?.openingHours || '';
-
-    // Construct HTML safely using escaping
-    const htmlContent = `
-      <html><head><title>Invoice ${escape(bill.invoiceNumber)}</title>
-      <style>body{font-family:sans-serif;padding:20px;max-width:400px;margin:auto}
-      h2{text-align:center;margin-bottom:5px;}
-      .shop-details{text-align:center;font-size:0.9em;color:#555;margin-bottom:15px;}
-      .shop-details p{margin:2px 0;}
-      hr{border:1px solid #ccc;border-top:1px dashed #ccc;}
-      .row{display:flex;justify-content:space-between;padding:4px 0}
-      .total{font-size:1.2em;font-weight:bold}</style></head>
-      <body>
-        <h2>${escape(shopName)}</h2>
-        <div class="shop-details">
-          ${shopAddress ? `<p>${escape(shopAddress)}</p>` : ''}
-          ${shopGst ? `<p>GSTIN: ${escape(shopGst)}</p>` : ''}
-          ${openingHours ? `<p>Hours: ${escape(openingHours)}</p>` : ''}
-        </div>
-        <hr/>
-        <h3 style="text-align:center;margin:10px 0;">INVOICE</h3>
-        <p style="text-align:center;margin-top:0;">${escape(bill.invoiceNumber)}</p>
-        <hr/>
-        <div class="row"><span>Customer:</span><span>${escape(bill.customerName)}</span></div>
-        <div class="row"><span>Mobile:</span><span>${escape(bill.mobileNumber)}</span></div>
-        ${bill.customerGstNumber ? `<div class="row"><span>Customer GSTIN:</span><span>${escape(bill.customerGstNumber)}</span></div>` : ''}
-        <div class="row"><span>Date:</span><span>${escape(new Date(bill.createdAt).toLocaleString('en-IN'))}</span></div>
-        <div class="row"><span>Billed By:</span><span>${escape(bill.billedBy?.name || 'N/A')}</span></div>
-        <hr/>
-        ${bill.products.map((p) => `<div class="row"><span>${escape(p.itemName)} × ${escape(formatQty(p.quantity, p.unit))}</span><span>₹${escape(p.total)}</span></div>`).join('')}
-        <hr/>
-        <div class="row" style="color:#555"><span>Subtotal</span><span>₹${escape((bill.subTotal || 0).toLocaleString('en-IN'))}</span></div>
-        <div class="row" style="color:#555"><span>GST (5%)</span><span>₹${escape((bill.gstAmount || 0).toLocaleString('en-IN'))}</span></div>
-        <div class="row" style="color:#555"><span>Payment</span><span>${escape(getPaymentText(bill.paymentMethod))}</span></div>
-        <hr/>
-        <div class="row total"><span>TOTAL</span><span>₹${escape(bill.totalAmount.toLocaleString('en-IN'))}</span></div>
-      </body></html>
-    `;
-
-    // Purify explicitly using Snyk-approved sanitizer
-    const cleanHTML = DOMPurify.sanitize(htmlContent, { WHOLE_DOCUMENT: true });
-
-    win.document.write(cleanHTML);
-    win.document.close();
-
-    setTimeout(() => {
-      win.print();
-    }, 250);
+    const ok = printReceipt({
+      invoice: bill.invoiceNumber,
+      date: bill.createdAt,
+      customerName: bill.customerName,
+      mobile: bill.mobileNumber,
+      customerGst: bill.customerGstNumber,
+      billedBy: bill.billedBy?.name,
+      billType: bill.billType,
+      paymentMethod: bill.paymentMethod,
+      items: bill.products.map((p) => ({ ...p, name: p.itemName, discountLabel: lineDiscountLabel(p) })),
+      gross: itemsTotal(bill),
+      itemDiscountAmount: bill.itemDiscountAmount,
+      discountLabel: discountLabel(bill),
+      discountAmount: bill.discountAmount,
+      subTotal: bill.subTotal,
+      gstAmount: bill.gstAmount,
+      total: bill.totalAmount,
+    }, settings || {});
+    if (!ok) toast.error('Allow pop-ups to print the bill.');
   };
 
 
@@ -326,10 +317,30 @@ export default function BillingList() {
       `}</style>
 
       <div className="mx-auto max-w-screen-2xl space-y-6 md:space-y-8">
-        <div className="space-y-1">
-          <h1 className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight text-gray-900">Billing List</h1>
-          <p className="text-base sm:text-lg text-gray-600">Every bill across all branches, searchable and filterable</p>
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+          <div className="space-y-1">
+            <h1 className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight text-gray-900">Billing List</h1>
+            <p className="text-base sm:text-lg text-gray-600">Every bill across all branches, searchable and filterable</p>
+          </div>
+          <button type="button" onClick={() => setReportOpen(true)}
+            className="self-start sm:self-auto inline-flex items-center gap-2 h-11 px-5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold shadow-lg">
+            <Download size={17} /> Download report
+          </button>
         </div>
+
+        <ReportDialog
+          open={reportOpen}
+          onClose={() => setReportOpen(false)}
+          kind="bills"
+          endpoint="/bill/report"
+          title="Download bill report"
+          filters={{ payment: payment !== 'all' ? payment : '', type: billType !== 'all' ? billType : '', search }}
+          filterSummary={[
+            payment !== 'all' && PAYMENTS.find((x) => x.id === payment)?.label,
+            billType !== 'all' && TYPES.find((x) => x.id === billType)?.label,
+            search && `"${search}"`,
+          ].filter(Boolean).join(' · ')}
+        />
 
         {/* Stats */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-5">
@@ -368,6 +379,14 @@ export default function BillingList() {
                 <button key={r.id} role="tab" aria-selected={range === r.id} onClick={() => setRange(r.id)}
                   className={`px-4 py-2 rounded-full text-sm font-semibold whitespace-nowrap transition-all active:scale-95 ${range === r.id ? 'bg-gray-900 text-white shadow' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
                   {r.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-1.5 overflow-x-auto no-scrollbar -mx-1 px-1" role="tablist" aria-label="Bill type">
+              {TYPES.map((t) => (
+                <button key={t.id} role="tab" aria-selected={billType === t.id} onClick={() => setBillType(t.id)}
+                  className={`px-4 py-2 rounded-full text-sm font-semibold whitespace-nowrap transition-all active:scale-95 ${billType === t.id ? 'bg-emerald-700 text-white shadow' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                  {t.label}
                 </button>
               ))}
             </div>
@@ -418,6 +437,7 @@ export default function BillingList() {
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-gray-900 truncate">{bill.customerName}</span>
                         <span className="hidden sm:inline"><PayChip method={bill.paymentMethod} small /></span>
+                        {bill.billType && bill.billType !== 'retail' && <TypeChip type={bill.billType} />}
                       </div>
                       <div className="text-xs md:text-sm text-gray-500 flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-0.5">
                         <span className="font-mono text-emerald-600">{bill.invoiceNumber}</span>
@@ -485,7 +505,7 @@ export default function BillingList() {
               </div>
               <div className="relative mt-4 flex items-end justify-between">
                 <div className="text-4xl font-bold tracking-tight tabular-nums">{inr(viewBill.totalAmount)}</div>
-                <PayChip method={viewBill.paymentMethod} />
+                <div className="flex items-center gap-2"><TypeChip type={viewBill.billType} /><PayChip method={viewBill.paymentMethod} /></div>
               </div>
               <div className="relative text-sm text-white/80 mt-1">{new Date(viewBill.createdAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}</div>
             </div>
@@ -518,7 +538,8 @@ export default function BillingList() {
                     <div key={i} className="flex items-center justify-between gap-3 p-3.5">
                       <div className="min-w-0">
                         <div className="font-semibold text-gray-900 truncate">{p.itemName}</div>
-                        <div className="text-xs text-gray-500">{formatQty(p.quantity, p.unit)} × {inr(p.price)}{perLabel(p)}{p.gstIncluded ? ' · incl. GST' : ''}</div>
+                        <div className="text-xs text-gray-500">{lineDetail(p, inr)}{p.gstIncluded ? ' · incl. GST' : ''}</div>
+                        {p.discountAmount > 0 && <div className="text-xs text-emerald-700 font-medium">{lineDiscountLabel(p)} − {inr(p.discountAmount)}</div>}
                       </div>
                       <div className="font-bold text-gray-900 tabular-nums">{inr(p.total)}</div>
                     </div>
@@ -527,7 +548,14 @@ export default function BillingList() {
               </div>
 
               <div className="rounded-2xl bg-gray-900 text-white p-5 space-y-2 text-sm">
-                <div className="flex justify-between text-gray-400"><span>Subtotal</span><span className="text-white tabular-nums">{inr(viewBill.subTotal)}</span></div>
+                {(viewBill.discountAmount > 0 || viewBill.itemDiscountAmount > 0) && (
+                  <>
+                    <div className="flex justify-between text-gray-400"><span>Items total</span><span className="text-white tabular-nums">{inr(itemsTotal(viewBill))}</span></div>
+                    {viewBill.itemDiscountAmount > 0 && <div className="flex justify-between text-gray-400"><span>Item discounts</span><span className="text-emerald-400 tabular-nums">− {inr(viewBill.itemDiscountAmount)}</span></div>}
+                    {viewBill.discountAmount > 0 && <div className="flex justify-between text-gray-400"><span>{discountLabel(viewBill)}</span><span className="text-emerald-400 tabular-nums">− {inr(viewBill.discountAmount)}</span></div>}
+                  </>
+                )}
+                <div className="flex justify-between text-gray-400"><span>{viewBill.discountAmount > 0 || viewBill.itemDiscountAmount > 0 ? 'Taxable value' : 'Subtotal'}</span><span className="text-white tabular-nums">{inr(viewBill.subTotal)}</span></div>
                 <div className="flex justify-between text-gray-400"><span>GST (5%)</span><span className="text-white tabular-nums">{inr(viewBill.gstAmount)}</span></div>
                 <div className="flex justify-between pt-3 mt-1 border-t border-white/10 text-base font-bold"><span>Total</span><span className="text-emerald-400 tabular-nums">{inr(viewBill.totalAmount)}</span></div>
               </div>

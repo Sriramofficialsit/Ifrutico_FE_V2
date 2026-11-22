@@ -82,3 +82,224 @@
   .sb-app button { transition: none; }
   .sb-app button:not(:disabled):active { transform: none; }
 }
+
+/* =====================================================================================
+ * THEMES — light (refreshed) and dark. `sb-dark` is toggled on <body> by Context/ThemeContext.jsx.
+ * Everything is scoped to `.sb-app`, so the public site and the login pages are never affected.
+ * Surface / text / border colours come from the variables below; the utility remaps under
+ * `.sb-app.sb-dark` translate the Tailwind classes the pages already use, so pages need no dark: variants.
+ * ===================================================================================== */
+.sb-app {
+  --th-bg: #f3f6f4;
+  --th-glow-a: rgba(0, 117, 74, 0.10);
+  --th-glow-b: rgba(251, 191, 36, 0.10);
+  --th-surface: #ffffff;
+  --th-surface-2: #f6f8f7;
+  --th-surface-3: #eef2f0;
+  --th-border: rgba(18, 52, 38, 0.08);
+  --th-border-strong: rgba(18, 52, 38, 0.14);
+  --th-heading: #006241;
+  --th-topbar: rgba(255, 255, 255, 0.78);
+  --th-sidebar: linear-gradient(185deg, #1f4237 0%, #1a3329 45%, #12241d 100%);
+  --sb-card-shadow: 0 1px 2px rgba(16, 32, 24, 0.04), 0 10px 28px -14px rgba(16, 52, 36, 0.18);
+  --sb-nav-shadow: 0 1px 0 rgba(18, 52, 38, 0.06), 0 8px 24px -16px rgba(16, 52, 36, 0.25);
+  background-color: var(--th-bg);
+}
+
+.sb-app.sb-dark {
+  color-scheme: dark;
+  --th-bg: #0a110e;
+  --th-glow-a: rgba(52, 195, 143, 0.13);
+  --th-glow-b: rgba(56, 189, 248, 0.07);
+  --th-surface: #111a16;
+  --th-surface-2: #16211c;
+  --th-surface-3: #1c2924;
+  --th-border: rgba(255, 255, 255, 0.07);
+  --th-border-strong: rgba(255, 255, 255, 0.13);
+  --th-heading: #6ee7b7;
+  --th-topbar: rgba(13, 21, 18, 0.72);
+  --th-sidebar: linear-gradient(185deg, #10241c 0%, #0c1a15 50%, #08120e 100%);
+  --sb-accent: #22a873;
+  --sb-text: #e6efeb;
+  --sb-text-soft: #9db0a7;
+  --th-faint: #6d8178;
+  --sb-card-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 12px 32px -16px rgba(0, 0, 0, 0.7);
+  --sb-nav-shadow: 0 1px 0 rgba(255, 255, 255, 0.05), 0 10px 30px -18px rgba(0, 0, 0, 0.8);
+  --sb-frap-shadow: 0 0 0 1px rgba(110, 231, 183, 0.25), 0 10px 30px -6px rgba(34, 168, 115, 0.55);
+}
+
+/* Smooth cross-fade only while switching theme */
+.sb-theme-anim, .sb-theme-anim * {
+  transition: background-color 0.35s ease, border-color 0.35s ease, color 0.25s ease, box-shadow 0.35s ease !important;
+}
+
+/* ---- App canvas: soft colour glows instead of a flat fill ---- */
+.sb-app .bg-canvas {
+  background-color: var(--th-bg) !important;
+  background-image:
+    radial-gradient(1100px 520px at 100% -8%, var(--th-glow-a), transparent 62%),
+    radial-gradient(900px 480px at -8% 108%, var(--th-glow-b), transparent 58%) !important;
+}
+
+/* ---- Top bar: frosted glass ---- */
+.sb-app .sb-topbar {
+  background: var(--th-topbar) !important;
+  -webkit-backdrop-filter: saturate(160%) blur(14px) !important;
+  backdrop-filter: saturate(160%) blur(14px) !important;
+  border-bottom: 1px solid var(--th-border);
+}
+.sb-app .sb-topbar-title { color: var(--th-heading) !important; }
+
+/* ---- Sidebar: deep green gradient, glowing active pill ---- */
+.sb-app .sb-sidebar {
+  background: var(--th-sidebar) !important;
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.05);
+}
+.sb-app .sb-nav-active {
+  background: #fff !important;
+  color: #006241 !important;
+  box-shadow: 0 6px 18px -8px rgba(0, 0, 0, 0.45) !important;
+}
+.sb-app.sb-dark .sb-nav-active {
+  background: linear-gradient(90deg, rgba(52, 195, 143, 0.28), rgba(52, 195, 143, 0.10)) !important;
+  color: #a7f3d0 !important;
+  box-shadow: inset 0 0 0 1px rgba(110, 231, 183, 0.28), 0 8px 22px -10px rgba(52, 195, 143, 0.5) !important;
+}
+
+/* ---- Cards: hairline border + layered soft shadow (both themes) ---- */
+.sb-app main :is(.bg-white, .bg-white\/40, .bg-white\/50, .bg-white\/60, .bg-white\/70, .bg-white\/80, .bg-white\/90, .bg-white\/95):is(.rounded-xl, .rounded-2xl, .rounded-3xl) {
+  border-color: var(--th-border);
+}
+
+/* ---- Theme switch (top bar) ---- */
+.sb-theme-switch {
+  position: relative; width: 64px; height: 34px; flex-shrink: 0;
+  border-radius: 999px !important; padding: 0;
+  background: #e8efeb; box-shadow: inset 0 0 0 1px rgba(18, 52, 38, 0.10);
+  display: flex; align-items: center; justify-content: space-between; padding: 0 9px;
+  color: #8a9a92;
+}
+.sb-theme-switch .sb-theme-knob {
+  position: absolute; top: 3px; left: 3px; width: 28px; height: 28px; border-radius: 50%;
+  background: linear-gradient(145deg, #ffd56b, #f59e0b);
+  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.45);
+  display: flex; align-items: center; justify-content: center; color: #fff;
+  transition: transform 0.35s cubic-bezier(.4, 1.4, .5, 1), background 0.35s ease, box-shadow 0.35s ease;
+}
+.sb-app.sb-dark .sb-theme-switch { background: #17231e; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.09); color: #5f736a; }
+.sb-app.sb-dark .sb-theme-switch .sb-theme-knob {
+  transform: translateX(30px);
+  background: linear-gradient(145deg, #3b4b8f, #1e2a5a);
+  box-shadow: 0 0 0 1px rgba(165, 180, 252, 0.3), 0 2px 12px rgba(99, 102, 241, 0.5);
+}
+.sb-app .sb-theme-switch:active { transform: scale(0.95); }
+
+/* =====================================================================================
+ * DARK — remap the Tailwind colour utilities used across the dashboard
+ * ===================================================================================== */
+.sb-app.sb-dark { background-color: var(--th-bg); color: var(--sb-text); }
+.sb-app.sb-dark main h1:not([class*="text-white"]) { color: var(--th-heading); }
+
+/* Surfaces */
+.sb-app.sb-dark :is(.bg-white, .bg-white\/40, .bg-white\/50, .bg-white\/60, .bg-white\/70, .bg-white\/80, .bg-white\/90, .bg-white\/95):not(.sb-keep-light):not(.sb-nav-active):not(.rounded-full) {
+  background-color: var(--th-surface) !important;
+}
+.sb-app.sb-dark :is(.bg-gray-50, .bg-gray-50\/30, .bg-gray-50\/60, .bg-gray-50\/80, .bg-canvas\/50) { background-color: var(--th-surface-2) !important; }
+.sb-app.sb-dark .bg-gray-100 { background-color: var(--th-surface-3) !important; }
+.sb-app.sb-dark :is(.bg-gray-200, .bg-gray-200\/60) { background-color: #25342e !important; }
+.sb-app.sb-dark .bg-gray-300 { background-color: #33443d !important; }
+.sb-app.sb-dark :is(.bg-gray-900, .bg-gray-950) { background-color: #18302a !important; }
+.sb-app.sb-dark .bg-gray-900\/80 { background-color: rgba(10, 17, 14, 0.85) !important; }
+
+.sb-app.sb-dark :is(.hover\:bg-gray-50, .hover\:bg-gray-50\/50, .hover\:bg-white, .hover\:bg-white\/80, .hover\:bg-white\/70):hover { background-color: var(--th-surface-3) !important; }
+.sb-app.sb-dark :is(.hover\:bg-gray-100, .hover\:bg-gray-200):hover { background-color: #25342e !important; }
+.sb-app.sb-dark .hover\:bg-gray-800:hover { background-color: #21403a !important; }
+.sb-app.sb-dark .hover\:bg-black\/5:hover { background-color: rgba(255, 255, 255, 0.06) !important; }
+
+/* Text */
+.sb-app.sb-dark :is(.text-gray-900, .text-gray-800, .text-gray-700, .text-black\/80, .hover\:text-gray-900:hover, .hover\:text-gray-800:hover, .hover\:text-gray-700:hover) { color: var(--sb-text) !important; }
+.sb-app.sb-dark :is(.text-gray-600, .text-gray-500, .text-black\/50, .hover\:text-gray-500:hover) { color: var(--sb-text-soft) !important; }
+.sb-app.sb-dark :is(.text-gray-400, .text-gray-300, .text-gray-200) { color: var(--th-faint) !important; }
+.sb-app.sb-dark .sb-nav-active { color: #a7f3d0 !important; }
+
+/* Borders & dividers */
+.sb-app.sb-dark :is(.border-gray-50, .border-gray-100, .border-gray-100\/60, .border-gray-100\/80, .border-gray-200, .border-white\/40, .border-white\/50, .border-white\/60, .border-white\/70, .border-black\/20) { border-color: var(--th-border) !important; }
+.sb-app.sb-dark :is(.border-gray-300, .hover\:border-gray-300:hover, .hover\:border-gray-400:hover, .group:hover .group-hover\:border-gray-300) { border-color: var(--th-border-strong) !important; }
+.sb-app.sb-dark .border-gray-900 { border-color: #6ee7b7 !important; }
+.sb-app.sb-dark :is(.divide-gray-50, .divide-gray-100, .divide-gray-200, .divide-white\/50) > :not([hidden]) ~ :not([hidden]) { border-color: var(--th-border) !important; }
+
+/* Inputs */
+.sb-app.sb-dark :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]), select, textarea) {
+  background-color: var(--th-surface-2) !important;
+  border-color: var(--th-border-strong) !important;
+  color: var(--sb-text) !important;
+}
+.sb-app.sb-dark :is(input, textarea)::placeholder { color: var(--th-faint) !important; }
+.sb-app.sb-dark :is(input, select, textarea):focus { border-color: #34c38f !important; box-shadow: 0 0 0 3px rgba(52, 195, 143, 0.18) !important; }
+.sb-app.sb-dark select option { background: var(--th-surface-2); color: var(--sb-text); }
+/* Transparent inputs inside steppers / search pills stay transparent */
+.sb-app.sb-dark input.bg-transparent { background-color: transparent !important; }
+
+/* Brand green, readable on dark */
+.sb-app.sb-dark :is(.text-emerald-500, .text-emerald-600, .text-teal-600, .group:hover .group-hover\:text-emerald-500, .group:hover .group-hover\:text-emerald-600, .hover\:text-emerald-600:hover, .hover\:text-emerald-500:hover) { color: #4fd1a1 !important; }
+.sb-app.sb-dark :is(.text-emerald-700, .text-emerald-800, .text-emerald-900, .hover\:text-emerald-700:hover, .hover\:text-emerald-800:hover) { color: #6ee7b7 !important; }
+.sb-app.sb-dark .text-emerald-700\/40 { color: rgba(110, 231, 183, 0.4) !important; }
+.sb-app.sb-dark :is(.bg-emerald-50, .bg-emerald-50\/40, .bg-emerald-50\/50, .bg-emerald-50\/60, .bg-emerald-50\/80, .bg-teal-50) { background-color: rgba(52, 195, 143, 0.10) !important; }
+.sb-app.sb-dark :is(.bg-emerald-100, .bg-teal-100) { background-color: rgba(52, 195, 143, 0.17) !important; }
+.sb-app.sb-dark .bg-emerald-200 { background-color: rgba(52, 195, 143, 0.26) !important; }
+.sb-app.sb-dark :is(.hover\:bg-emerald-50, .hover\:bg-emerald-50\/50, .hover\:bg-emerald-50\/40):hover { background-color: rgba(52, 195, 143, 0.12) !important; }
+.sb-app.sb-dark .hover\:bg-emerald-100:hover { background-color: rgba(52, 195, 143, 0.2) !important; }
+.sb-app.sb-dark :is(.border-emerald-100, .border-emerald-200, .border-emerald-200\/50, .border-emerald-300, .hover\:border-emerald-100:hover, .hover\:border-emerald-200:hover) { border-color: rgba(52, 195, 143, 0.28) !important; }
+.sb-app.sb-dark :is(.ring-emerald-100, .ring-emerald-200) { --tw-ring-color: rgba(52, 195, 143, 0.3) !important; }
+
+/* Status colours: tinted backgrounds + brighter text */
+.sb-app.sb-dark :is(.bg-red-50, .hover\:bg-red-50:hover) { background-color: rgba(248, 113, 113, 0.12) !important; }
+.sb-app.sb-dark :is(.text-red-500, .text-red-600, .text-red-700, .hover\:text-red-500:hover, .hover\:text-red-600:hover) { color: #f87171 !important; }
+.sb-app.sb-dark :is(.border-red-100, .border-red-200, .hover\:border-red-100:hover, .hover\:border-red-200:hover) { border-color: rgba(248, 113, 113, 0.3) !important; }
+
+.sb-app.sb-dark .bg-amber-50 { background-color: rgba(251, 191, 36, 0.10) !important; }
+.sb-app.sb-dark .bg-amber-100 { background-color: rgba(251, 191, 36, 0.16) !important; }
+.sb-app.sb-dark :is(.text-amber-600, .text-amber-700, .text-amber-800) { color: #fbbf24 !important; }
+.sb-app.sb-dark :is(.border-amber-200, .border-amber-300) { border-color: rgba(251, 191, 36, 0.3) !important; }
+
+.sb-app.sb-dark :is(.bg-orange-50, .hover\:bg-orange-50:hover) { background-color: rgba(251, 146, 60, 0.10) !important; }
+.sb-app.sb-dark :is(.bg-orange-100, .hover\:bg-orange-100:hover) { background-color: rgba(251, 146, 60, 0.17) !important; }
+.sb-app.sb-dark :is(.text-orange-500, .text-orange-600, .text-orange-700) { color: #fb923c !important; }
+.sb-app.sb-dark .border-orange-100 { border-color: rgba(251, 146, 60, 0.28) !important; }
+
+.sb-app.sb-dark .bg-blue-50 { background-color: rgba(96, 165, 250, 0.10) !important; }
+.sb-app.sb-dark .bg-blue-100 { background-color: rgba(96, 165, 250, 0.17) !important; }
+.sb-app.sb-dark :is(.text-blue-500, .text-blue-600, .text-blue-700) { color: #60a5fa !important; }
+.sb-app.sb-dark .border-blue-100 { border-color: rgba(96, 165, 250, 0.28) !important; }
+
+.sb-app.sb-dark .bg-violet-50 { background-color: rgba(167, 139, 250, 0.12) !important; }
+.sb-app.sb-dark :is(.text-violet-600, .text-violet-700) { color: #a78bfa !important; }
+.sb-app.sb-dark .border-violet-200 { border-color: rgba(167, 139, 250, 0.3) !important; }
+.sb-app.sb-dark .bg-sky-100 { background-color: rgba(56, 189, 248, 0.15) !important; }
+.sb-app.sb-dark .text-sky-800 { color: #7dd3fc !important; }
+.sb-app.sb-dark .bg-pink-50 { background-color: rgba(244, 114, 182, 0.12) !important; }
+.sb-app.sb-dark .text-pink-600 { color: #f472b6 !important; }
+
+/* Modal backdrops a touch deeper */
+.sb-app.sb-dark :is(.bg-black\/30, .bg-black\/40) { background-color: rgba(0, 0, 0, 0.6) !important; }
+
+/* Scrollbars */
+.sb-app.sb-dark * { scrollbar-color: #2a3a34 transparent; }
+.sb-app.sb-dark ::-webkit-scrollbar-thumb { background: #2a3a34; border-radius: 8px; }
+.sb-app.sb-dark ::-webkit-scrollbar-track { background: transparent; }
+
+/* Frap glows on dark */
+.sb-app.sb-dark .sb-frap { background: linear-gradient(145deg, #2bb47f, #17845a); }
+
+/* ---- Live clock (top bar) ---- */
+.sb-app .sb-clock {
+  background: linear-gradient(135deg, rgba(0, 117, 74, 0.10), rgba(0, 117, 74, 0.04));
+  box-shadow: inset 0 0 0 1px rgba(0, 117, 74, 0.16);
+}
+.sb-app.sb-dark .sb-clock {
+  background: linear-gradient(135deg, rgba(52, 195, 143, 0.14), rgba(52, 195, 143, 0.04));
+  box-shadow: inset 0 0 0 1px rgba(110, 231, 183, 0.18), 0 0 18px -6px rgba(52, 195, 143, 0.35);
+}
+@keyframes sb-sec-in { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: none; } }
+.sb-clock-sec { display: inline-block; animation: sb-sec-in 0.28s ease-out; }
+@media (prefers-reduced-motion: reduce) { .sb-clock-sec { animation: none; } }

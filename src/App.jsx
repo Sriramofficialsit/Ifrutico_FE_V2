@@ -29,8 +29,11 @@ const MenuLeads = lazy(() => import("./Pages/MenuLeads"));
 const OrderLeads = lazy(() => import("./Pages/OrderLeads"));
 const DealershipLeads = lazy(() => import("./Pages/DealershipLeads"));
 const TestimonialManager = lazy(() => import("./Pages/TestimonialManager"));
+const Campaigns = lazy(() => import("./Pages/Campaigns"));
+const Coupons = lazy(() => import("./Pages/Coupons"));
 
 import { AuthProvider, useAuth } from "./Context/AuthContext";
+import { ThemeProvider } from "./Context/ThemeContext";
 
 
 // Shows a full-screen loader while the session cookie is being verified
@@ -83,7 +86,10 @@ function Layout() {
           <Suspense fallback={<div className="flex justify-center py-20"><div className="w-8 h-8 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin" /></div>}>
           <Routes>
             <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/billing" element={<Billing />} />
+            {/* key per mode: switching tabs starts a fresh bill instead of carrying one screen's cart into another */}
+            <Route path="/billing" element={<Billing key="retail" mode="retail" />} />
+            <Route path="/billing/events" element={<Billing key="event" mode="event" />} />
+            <Route path="/billing/stalls" element={<Billing key="stall" mode="stall" />} />
             <Route path="/stock" element={<Stock />} />
             <Route path="/bills" element={user?.role === 'admin' ? <BillingList /> : <Navigate to="/dashboard" replace />} />
             <Route path="/reports" element={<Reports />} />
@@ -95,6 +101,8 @@ function Layout() {
             <Route path="/order-leads" element={user?.role === 'admin' ? <OrderLeads /> : <Navigate to="/dashboard" replace />} />
             <Route path="/dealership-leads" element={user?.role === 'admin' ? <DealershipLeads /> : <Navigate to="/dashboard" replace />} />
             <Route path="/testimonials-manager" element={user?.role === 'admin' ? <TestimonialManager /> : <Navigate to="/dashboard" replace />} />
+            <Route path="/campaigns" element={user?.role === 'admin' ? <Campaigns /> : <Navigate to="/dashboard" replace />} />
+            <Route path="/campaigns/coupons" element={user?.role === 'admin' ? <Coupons /> : <Navigate to="/dashboard" replace />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>
           </Suspense>
@@ -102,7 +110,7 @@ function Layout() {
       </div>
 
       {/* Frap: persistent floating entry to the most common action */}
-      {pathname !== '/billing' && (
+      {!pathname.startsWith('/billing') && (
         <Link to="/billing" className="sb-frap" aria-label="New bill" title="New bill">
           <ShoppingBag size={24} />
         </Link>
@@ -115,6 +123,7 @@ function Layout() {
 function App() {
   return (
     <BrowserRouter>
+      <ThemeProvider>
       <AuthProvider>
         <Toaster position="top-right" toastOptions={{ style: { borderRadius: '12px', background: '#1E3932', color: '#fff', fontSize: '14px' }, success: { iconTheme: { primary: '#00754A', secondary: '#fff' } } }} />
         <Suspense fallback={<LoadingScreen />}>
@@ -169,6 +178,7 @@ function App() {
         </Routes>
         </Suspense>
       </AuthProvider>
+      </ThemeProvider>
     </BrowserRouter>
   );
 }

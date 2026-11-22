@@ -1,12 +1,19 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Plus, Minus, Trash2, Send, Search, Printer, X, Banknote, Smartphone, IceCreamCone, ShoppingBag, ChevronRight, ChevronLeft, Calendar, UserRound, Check } from 'lucide-react';
+import { Plus, Minus, Trash2, Send, Search, Printer, X, Banknote, Smartphone, IceCreamCone, ShoppingBag, ChevronRight, ChevronLeft, Calendar, UserRound, Check, Tag, TicketPercent, Loader2 } from 'lucide-react';
 import { apiFetch, assetUrl } from '../utils/api';
 import { useAuth } from '../Context/AuthContext';
 import toast from 'react-hot-toast';
 import { buildBillMessage } from '../utils/whatsappBill';
 import { unitOf, unitStep, unitInitial, isLowStock, formatQty, formatStock, unitPrice, perLabel } from '../utils/units';
-import { billTotals } from '../utils/gst';
+import { billTotals, discountLabel, lineDiscountLabel } from '../utils/gst';
+import { couponDiscount, offerText } from '../utils/coupon';
 import { createPortal } from 'react-dom';
+import { printReceipt } from '../utils/receipt';
+import { NavLink, Link } from 'react-router-dom';
+import {
+  BILL_MODES, BILL_MODE_LIST, DEFAULT_BILLING_CONFIG, isMeasurable, lineQuantity, lineCountLabel,
+  litresToUnits, stockInLitres, stockInScoops, pricePerLitre, pricePerScoop, fmtLitres,
+} from '../utils/billModes';
 
 const inr = (n) => `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 const inputCls = 'w-full h-11 px-3.5 border border-gray-200 bg-white text-sm outline-none transition-all';
@@ -82,8 +89,50 @@ function Steps({ current }) {
   );
 }
 
-export default function Billing() {
+// Retail / Events & Functions / Stalls switcher, styled like the category chips
+function ModeTabs({ current }) {
+  return (
+    <nav aria-label="Billing type" className="flex gap-1 p-1 bg-white border border-gray-200 rounded-full overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {BILL_MODE_LIST.map((m) => (
+        <NavLink key={m.key} to={m.path} end
+          className={`shrink-0 inline-flex items-center gap-2 px-4 h-9 rounded-full text-sm font-medium transition-colors ${current === m.key ? 'bg-emerald-700 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
+          <m.icon size={16} /> {m.label}
+        </NavLink>
+      ))}
+    </nav>
+  );
+}
+
+// Stalls: scoop size for this bill (defaults to the central setting)
+function ScoopSize({ value, onChange, fallback, error }) {
+  const n = Number(value) || fallback;
+  const bump = (d) => onChange(String(Math.min(1000, Math.max(10, n + d))));
+  return (
+    <div className="px-5 py-3 border-b border-gray-100 bg-emerald-50/60">
+      <div className="flex items-center justify-between gap-3">
+        <label htmlFor="scoop-grams" className="text-sm font-medium text-gray-700 flex items-center gap-1.5"><IceCreamCone size={15} className="text-emerald-700" /> Scoop size</label>
+        <div className="flex items-center border border-gray-200 bg-white rounded-full p-0.5">
+          <button type="button" onClick={() => bump(-5)} aria-label="Smaller scoop" className="w-8 h-8 hover:bg-gray-100 flex items-center justify-center text-gray-600"><Minus size={14} /></button>
+          <input id="scoop-grams" type="number" inputMode="numeric" min="10" max="1000" step="5" value={value} placeholder={String(fallback)}
+            onChange={(e) => onChange(e.target.value)} aria-invalid={!!error}
+            className="w-14 h-8 text-center font-semibold text-sm text-gray-900 bg-transparent !border-0 !shadow-none outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" />
+          <span className="text-xs text-gray-400 pr-1">g</span>
+          <button type="button" onClick={() => bump(5)} aria-label="Bigger scoop" className="w-8 h-8 hover:bg-gray-100 flex items-center justify-center text-gray-600"><Plus size={14} /></button>
+        </div>
+      </div>
+      {error ? <p className="mt-1 text-xs text-red-600">{error}</p> : <p className="mt-1 text-xs text-gray-500">Scoop prices and stock use this size. Default {fallback} g.</p>}
+    </div>
+  );
+}
+
+export default function Billing({ mode = 'retail' }) {
   const { user } = useAuth();
+  const modeInfo = BILL_MODES[mode] || BILL_MODES.retail;
+  const isRetail = mode === 'retail';
+  const countField = mode === 'event' ? 'boxes' : 'scoops'; // what +/- changes on Events / Stalls lines
+  const countWord = mode === 'event' ? 'box' : 'scoop';
+  const [config, setConfig] = useState(DEFAULT_BILLING_CONFIG);
+  const [scoopInput, setScoopInput] = useState(''); // '' = use the configured scoop size
   const canAutofill = user?.role === 'admin'; // saved-customer suggestions are admin-only
   const [products, setProducts] = useState([]);
   const [loadingProducts, setLoadingProducts] = useState(true);
@@ -134,6 +183,14 @@ export default function Billing() {
   const [searchTerm, setSearchTerm] = useState('');
   const [category, setCategory] = useState('all');
   const [paymentMethod, setPaymentMethod] = useState('Cash');
+  // Bill discount: a flat ₹ amount or a % of the items' value, applied before GST
+  const [discountType, setDiscountType] = useState('amount'); // 'amount' | 'percent'
+  const [discountInput, setDiscountInput] = useState('');
+  // Coupon: checked by the server when applied (and again when the bill is saved); replaces the manual discount
+  const [coupon, setCoupon] = useState(null);
+  const [couponInput, setCouponInput] = useState('');
+  const [couponOpen, setCouponOpen] = useState(false);
+  const [couponBusy, setCouponBusy] = useState(false);
   // Checkout popup: null (closed) | 'details' (step 2) | 'generating' (animation) | 'done' (step 3)
   const [checkout, setCheckout] = useState(null);
   const [lastBill, setLastBill] = useState(null);
@@ -143,53 +200,25 @@ export default function Billing() {
 
   const handlePrint = () => {
     if (!lastBill) return;
-    const escape = (str) => String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    const win = window.open('', '_blank');
-
-    const shopName = settings?.shopName || 'Ifrutico';
-    const shopAddress = settings?.address || '';
-    const shopGst = settings?.gstNumber || '';
-    const openingHours = settings?.openingHours || '';
-
-    // Construct HTML safely using escaping
-    const htmlContent = `
-      <html><head><title>Invoice ${escape(lastBill.invoice)}</title>
-      <style>body{font-family:sans-serif;padding:20px;max-width:400px;margin:auto}
-      h2{text-align:center;margin-bottom:5px;}
-      .shop-details{text-align:center;font-size:0.9em;color:#555;margin-bottom:15px;}
-      .shop-details p{margin:2px 0;}
-      hr{border:1px solid #ccc;border-top:1px dashed #ccc;}
-      .row{display:flex;justify-content:space-between;padding:4px 0}
-      .total{font-size:1.2em;font-weight:bold}</style></head>
-      <body>
-        <h2>${escape(shopName)}</h2>
-        <div class="shop-details">
-          ${shopAddress ? `<p>${escape(shopAddress)}</p>` : ''}
-          ${shopGst ? `<p>GSTIN: ${escape(shopGst)}</p>` : ''}
-          ${openingHours ? `<p>Hours: ${escape(openingHours)}</p>` : ''}
-        </div>
-        <hr/>
-        <h3 style="text-align:center;margin:10px 0;">INVOICE</h3>
-        <p style="text-align:center;margin-top:0;">${escape(lastBill.invoice)}</p>
-        <hr/>
-        <div class="row"><span>Customer:</span><span>${escape(lastBill.customerName)}</span></div>
-        <div class="row"><span>Mobile:</span><span>${escape(lastBill.mobile)}</span></div>
-        ${lastBill.customerGst ? `<div class="row"><span>Customer GSTIN:</span><span>${escape(lastBill.customerGst)}</span></div>` : ''}
-        <div class="row"><span>Date:</span><span>${escape(lastBill.date)}</span></div>
-        <hr/>
-        ${lastBill.items.map((p) => `<div class="row"><span>${escape(p.name)} × ${escape(p.qty)}</span><span>₹${escape(p.total)}</span></div>`).join('')}
-        <hr/>
-        <div class="row" style="color:#555"><span>Subtotal</span><span>₹${escape((lastBill.subTotal || 0).toLocaleString('en-IN'))}</span></div>
-        <div class="row" style="color:#555"><span>GST (5%)</span><span>₹${escape((lastBill.gstAmount || 0).toLocaleString('en-IN'))}</span></div>
-        <div class="row" style="color:#555"><span>Payment</span><span>${escape(lastBill.paymentMethod)}</span></div>
-        <hr/>
-        <div class="row total"><span>TOTAL</span><span>₹${escape(lastBill.total.toLocaleString('en-IN'))}</span></div>
-      </body></html>
-    `;
-
-    win.document.write(htmlContent);
-    win.document.close();
-    setTimeout(() => win.print(), 250);
+    const ok = printReceipt({
+      invoice: lastBill.invoice,
+      date: lastBill.createdAt,
+      customerName: lastBill.customerName,
+      mobile: lastBill.mobile,
+      customerGst: lastBill.customerGst,
+      billedBy: user?.name,
+      billType: lastBill.billType,
+      paymentMethod: lastBill.paymentMethod,
+      items: lastBill.items,
+      gross: lastBill.gross,
+      itemDiscountAmount: lastBill.itemDiscountAmount,
+      discountLabel: discountLabel(lastBill),
+      discountAmount: lastBill.discountAmount,
+      subTotal: lastBill.subTotal,
+      gstAmount: lastBill.gstAmount,
+      total: lastBill.total,
+    }, settings || {});
+    if (!ok) toast.error('Allow pop-ups to print the bill.');
   };
 
   // Fetch products and settings from backend
@@ -202,7 +231,13 @@ export default function Billing() {
     apiFetch('/settings')
       .then(data => setSettings(data.data))
       .catch(() => {});
-  }, []);
+
+    if (!isRetail) {
+      apiFetch('/billing-config')
+        .then((d) => d.data && setConfig({ ...DEFAULT_BILLING_CONFIG, ...d.data }))
+        .catch(() => toast.error('Could not load billing units; using defaults.'));
+    }
+  }, [isRetail]);
 
   // Step 2 opens with the name field focused; Escape closes it (but never mid-generation)
   useEffect(() => {
@@ -213,17 +248,59 @@ export default function Billing() {
     return () => document.removeEventListener('keydown', onKey);
   }, [checkout]);
 
-  const categories = useMemo(() => [...new Set(products.map((p) => p.category).filter(Boolean))].sort(), [products]);
+  const categories = useMemo(() => [...new Set((isRetail ? products : products.filter(isMeasurable)).map((p) => p.category).filter(Boolean))].sort(), [products, isRetail]);
 
   const term = searchTerm.trim().toLowerCase();
-  const filteredProducts = products.filter((p) =>
+  // Events and Stalls only list products stocked by weight or volume
+  const sellable = useMemo(() => (isRetail ? products : products.filter(isMeasurable)), [products, isRetail]);
+  const gpl = config.gramsPerLitre;
+  const scoopError = mode !== 'stall' || scoopInput === '' ? null
+    : !(Number(scoopInput) >= 10 && Number(scoopInput) <= 1000) ? 'Scoop size must be 10–1000 g.' : null;
+  const scoopGrams = mode === 'stall' && scoopInput !== '' && !scoopError ? Number(scoopInput) : config.scoopGrams;
+  const minBox = Math.min(...config.boxSizes);
+
+  // Events / Stalls lines store only box size + count or scoop count; the stock quantity and price follow from them
+  const withQty = (b, sg = scoopGrams) => {
+    if (isRetail) return b;
+    const quantity = lineQuantity(mode, b, config, sg);
+    return { ...b, quantity, subtotal: Number((quantity * unitPrice(b.item)).toFixed(2)) };
+  };
+  const lines = isRetail ? billItems : billItems.map((b) => withQty(b));
+  const maxCount = (b) => {
+    const one = lineQuantity(mode, { ...b, boxes: 1, scoops: 1 }, config, scoopGrams);
+    return one > 0 ? Math.floor(b.item.stock / one + 1e-9) : 0;
+  };
+  const isOut = (p) =>
+    mode === 'event' ? p.stock < litresToUnits(minBox, p, gpl)
+      : mode === 'stall' ? stockInScoops(p, gpl, scoopGrams) < 1
+      : p.stock <= 0;
+  const stockLeft = (p) =>
+    mode === 'event' ? `${formatQty(stockInLitres(p, gpl))} L`
+      : mode === 'stall' ? `${stockInScoops(p, gpl, scoopGrams)} scoops`
+      : formatStock(p.stock, p);
+  const priceLabel = (p) =>
+    mode === 'event' ? <>{inr(pricePerLitre(p, gpl))}<span className="text-xs font-normal text-gray-500">/L</span></>
+      : mode === 'stall' ? <>{inr(pricePerScoop(p, gpl, scoopGrams))}<span className="text-xs font-normal text-gray-500">/scoop</span></>
+      : <>₹{p.price}<span className="text-xs font-normal text-gray-500">{perLabel(p)}</span></>;
+
+  const filteredProducts = sellable.filter((p) =>
     (category === 'all' || p.category === category) &&
     (!term || p.itemName.toLowerCase().includes(term) || p.sku.toLowerCase().includes(term))
   );
 
-  const qtyInBill = (id) => billItems.find((b) => b.item._id === id)?.quantity;
+  const lineInBill = (id) => lines.find((b) => b.item._id === id);
 
   const addItem = (product) => {
+    if (!isRetail) {
+      if (isOut(product)) { toast.error(`Not enough ${product.itemName} left for one ${countWord}.`); return; }
+      if (billItems.some((b) => b.item._id === product._id)) { changeQuantity(product._id, 1); return; }
+      const line = mode === 'event'
+        ? { item: product, boxSize: config.boxSizes.includes(1) ? 1 : minBox, boxes: 1 }
+        : { item: product, scoops: 1 };
+      if (withQty(line).quantity > product.stock) line.boxSize = minBox;
+      setBillItems([...billItems, line]);
+      return;
+    }
     if (product.stock <= 0) {
       toast.error(`Sorry, ${product.itemName} is out of stock!`);
       return;
@@ -246,7 +323,7 @@ export default function Billing() {
   // Enter in the search box adds the first in-stock match (fast keyboard / barcode-scanner flow)
   const handleSearchKey = (e) => {
     if (e.key !== 'Enter') return;
-    const first = filteredProducts.find((p) => p.stock > 0);
+    const first = filteredProducts.find((p) => !isOut(p));
     if (first) { addItem(first); setSearchTerm(''); }
   };
 
@@ -256,6 +333,22 @@ export default function Billing() {
 
   // +/- buttons move by the unit's natural step (1 pcs, 0.5 kg/ltr, 100 g/ml), capped at available stock
   const changeQuantity = (id, direction) => {
+    if (!isRetail) {
+      setBillItems(
+        billItems
+          .map((b) => {
+            if (b.item._id !== id) return b;
+            const count = Math.max(0, (Number(b[countField]) || 0) + direction);
+            if (direction > 0 && count > maxCount(b)) {
+              toast.error(`Only ${stockLeft(b.item)} of ${b.item.itemName} available!`);
+              return b;
+            }
+            return { ...b, [countField]: count };
+          })
+          .filter((b) => Number(b[countField]) > 0)
+      );
+      return;
+    }
     setBillItems(
       billItems
         .map((b) => {
@@ -269,6 +362,20 @@ export default function Billing() {
 
   // Typed quantity (e.g. 0.75 kg). Empty is allowed while typing; it is validated on Continue.
   const setQuantity = (id, raw) => {
+    if (!isRetail) {
+      setBillItems(
+        billItems.map((b) => {
+          if (b.item._id !== id) return b;
+          if (raw === '') return { ...b, [countField]: '' };
+          let n = Math.floor(parseFloat(raw));
+          if (Number.isNaN(n) || n < 0) return b;
+          const max = maxCount(b);
+          if (n > max) { toast.error(`Only ${stockLeft(b.item)} of ${b.item.itemName} available!`); n = max; }
+          return { ...b, [countField]: n };
+        })
+      );
+      return;
+    }
     setBillItems(
       billItems.map((b) => {
         if (b.item._id !== id) return b;
@@ -285,11 +392,83 @@ export default function Billing() {
     );
   };
 
+  // Events: switch a line to another box size, keeping the box count within stock
+  const setBoxSize = (id, size) => {
+    setBillItems(
+      billItems.map((b) => {
+        if (b.item._id !== id) return b;
+        const next = { ...b, boxSize: size };
+        const max = maxCount(next);
+        if (max < 1) { toast.error(`Not enough ${b.item.itemName} for a ${fmtLitres(size)} box.`); return b; }
+        if (Number(next.boxes) > max) { toast(`Reduced to ${max} box${max === 1 ? '' : 'es'} (stock limit).`); next.boxes = max; }
+        return next;
+      })
+    );
+  };
+
   const removeItem = (id) => setBillItems(billItems.filter((b) => b.item._id !== id));
 
+  // Per-product discount: each bill line keeps discType ('amount' | 'percent') and discInput (as typed)
+  const setLineDiscount = (id, patch) =>
+    setBillItems(billItems.map((b) => (b.item._id === id ? { ...b, ...patch } : b)));
+  const lineDiscError = (b) => {
+    const raw = b.discInput ?? '';
+    if (raw === '') return null;
+    const v = Number(raw);
+    if (!(v >= 0)) return 'Enter a valid discount.';
+    if ((b.discType || 'amount') === 'percent' && v > 100) return "Can't be more than 100%.";
+    if ((b.discType || 'amount') === 'amount' && v > (Number(b.subtotal) || 0)) return `Can't be more than ${inr(b.subtotal)}.`;
+    return null;
+  };
+  // An invalid line discount is ignored in the totals (and blocks Continue) rather than silently capped
+  const pricedLines = lines.map((b) => ({
+    ...b,
+    discount: !lineDiscError(b) && Number(b.discInput) > 0 ? { type: b.discType || 'amount', value: Number(b.discInput) } : undefined,
+  }));
+  const lineDiscountErrorOf = lines.map(lineDiscError);
+  const firstLineDiscError = lines.findIndex((_, i) => lineDiscountErrorOf[i]);
+
   // Items priced "incl. GST" add nothing on top; others get +5% (same rule as the server)
-  const { subTotal, gstAmount, total } = billTotals(billItems);
-  const hasInclusive = billItems.some((b) => b.item.gstIncluded);
+  const discountValue = Number(discountInput) || 0;
+  const undiscounted = billTotals(pricedLines);
+  const couponShort = coupon && coupon.minBill > 0 && undiscounted.net < coupon.minBill ? coupon.minBill - undiscounted.net : 0;
+  const couponAmount = coupon && !couponShort ? couponDiscount(coupon, undiscounted.net) : 0;
+  const discountError =
+    coupon ? null
+      : discountInput === '' ? null
+      : !(Number(discountInput) >= 0) ? 'Enter a valid discount.'
+      : discountType === 'percent' && discountValue > 100 ? "Discount can't be more than 100%."
+      : discountType === 'amount' && discountValue > undiscounted.net ? `Discount can't be more than ${inr(undiscounted.net)}.`
+      : null;
+  // An invalid discount is ignored in the totals (and blocks Continue) rather than silently capped
+  const { gross, itemDiscount, lineDiscounts, discountAmount, subTotal, gstAmount, total } = coupon
+    ? billTotals(pricedLines, { type: 'amount', value: couponAmount })
+    : discountError
+      ? undiscounted
+      : billTotals(pricedLines, { type: discountType, value: discountValue });
+  const anyDiscount = itemDiscount > 0 || discountAmount > 0;
+  const discLabel = discountLabel({ discountAmount, discountType, discountValue, couponCode: coupon?.code });
+
+  const applyCoupon = async (e) => {
+    e?.preventDefault();
+    const code = couponInput.trim().toUpperCase();
+    if (!code) return;
+    setCouponBusy(true);
+    try {
+      const res = await apiFetch('/coupons/validate', { method: 'POST', body: { code, gross: undiscounted.net, billType: mode } });
+      setCoupon(res.data);
+      setDiscountInput('');
+      toast.success(`${res.data.code} applied: ${offerText(res.data)}`);
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setCouponBusy(false);
+    }
+  };
+  const removeCoupon = () => { setCoupon(null); setCouponInput(''); };
+  const hasInclusive = lines.some((b) => b.item.gstIncluded);
+  const totalLitres = mode === 'event' ? lines.reduce((s, b) => s + (Number(b.boxSize) || 0) * (Number(b.boxes) || 0), 0) : 0;
+  const totalScoops = mode === 'stall' ? lines.reduce((s, b) => s + (Number(b.scoops) || 0), 0) : 0;
 
   const clearBill = () => {
     setBillItems([]);
@@ -298,12 +477,23 @@ export default function Billing() {
     setCustomerEmail('');
     setCustomerGst('');
     setPaymentMethod('Cash');
+    setDiscountInput('');
+    setDiscountType('amount');
+    setCoupon(null);
+    setCouponInput('');
+    setCouponOpen(false);
   };
 
   // Step 1 -> 2
   const goToCustomer = () => {
     if (billItems.length === 0) { toast.error('Add at least one product.'); return; }
-    if (billItems.some((b) => !(Number(b.quantity) > 0))) { toast.error('Enter a quantity greater than 0 for every product.'); return; }
+    if (lines.some((b) => !(Number(b.quantity) > 0))) { toast.error(isRetail ? 'Enter a quantity greater than 0 for every product.' : `Enter at least 1 ${countWord} for every product.`); return; }
+    if (scoopError) { toast.error(scoopError); return; }
+    const over = lines.find((b) => b.quantity > b.item.stock);
+    if (over) { toast.error(`Only ${stockLeft(over.item)} of ${over.item.itemName} available.`); return; }
+    if (firstLineDiscError >= 0) { toast.error(`${lines[firstLineDiscError].item.itemName} discount: ${lineDiscountErrorOf[firstLineDiscError]}`); return; }
+    if (discountError) { toast.error(discountError); return; }
+    if (couponShort) { toast.error(`Add ${inr(couponShort)} more to use ${coupon.code}, or remove the coupon.`); return; }
     setCheckout('details');
   };
 
@@ -322,7 +512,15 @@ export default function Billing() {
         customerEmail: customerEmail.trim(),
         customerGstNumber: gst,
         paymentMethod,
-        products: billItems.map((b) => ({ productId: b.item._id, quantity: Number(b.quantity) })),
+        billType: mode,
+        products: pricedLines.map((b) => ({
+          ...(mode === 'event' ? { productId: b.item._id, boxSize: Number(b.boxSize), boxes: Number(b.boxes) }
+            : mode === 'stall' ? { productId: b.item._id, scoops: Number(b.scoops) }
+            : { productId: b.item._id, quantity: Number(b.quantity) }),
+          ...(b.discount ? { discountType: b.discount.type, discountValue: b.discount.value } : {}),
+        })),
+        ...(mode === 'stall' ? { scoopGrams } : {}),
+        ...(coupon ? { couponCode: coupon.code } : discountAmount > 0 ? { discountType, discountValue } : {}),
       };
       const [res] = await Promise.all([
         apiFetch('/bill/add', { method: 'POST', body: payload }),
@@ -335,13 +533,29 @@ export default function Billing() {
         email: customerEmail.trim(),
         customerGst: gst,
         invoice: res.data?.invoiceNumber,
-        subTotal: res.data?.subTotal || subTotal,
-        gstAmount: res.data?.gstAmount || gstAmount,
-        total: res.data?.totalAmount || total,
+        subTotal: res.data?.subTotal ?? subTotal,
+        gstAmount: res.data?.gstAmount ?? gstAmount,
+        total: res.data?.totalAmount ?? total,
+        gross,
+        itemDiscountAmount: res.data?.itemDiscountAmount ?? itemDiscount,
+        discountType: res.data?.discountType ?? discountType,
+        discountValue: res.data?.discountValue ?? discountValue,
+        discountAmount: res.data?.discountAmount ?? discountAmount,
+        couponCode: res.data?.couponCode || undefined,
         paymentMethod,
         emailSent,
         date: new Date().toLocaleDateString(),
-        items: billItems.map(b => ({ name: b.item.itemName, qty: formatQty(b.quantity, unitOf(b.item)), price: b.item.price, per: perLabel(b.item), quantity: b.quantity, unit: unitOf(b.item), priceQty: b.item.priceQty, total: b.subtotal }))
+        createdAt: res.data?.createdAt || new Date().toISOString(),
+        billType: mode,
+        items: pricedLines.map((b, i) => ({ name: b.item.itemName, qty: isRetail ? formatQty(b.quantity, unitOf(b.item)) : lineCountLabel(mode, b) + (mode === 'stall' ? ` (${scoopGrams} g)` : ''),
+          ...(mode === 'event' ? { boxes: Number(b.boxes), boxSize: Number(b.boxSize) } : {}),
+          ...(mode === 'stall' ? { scoops: Number(b.scoops), scoopGrams } : {}),
+          price: b.item.price, per: perLabel(b.item), quantity: b.quantity, unit: unitOf(b.item), priceQty: b.item.priceQty, total: b.subtotal, gstIncluded: !!b.item.gstIncluded,
+          ...(() => {
+            const saved = res.data?.products?.[i];
+            const amt = saved ? Number(saved.discountAmount) || 0 : lineDiscounts[i];
+            return amt > 0 ? { discountAmount: amt, discountLabel: lineDiscountLabel(saved || { discountAmount: amt, discountType: b.discount?.type, discountValue: b.discount?.value }) } : {};
+          })() }))
       });
       setCheckout('done');
       clearBill();
@@ -363,6 +577,10 @@ export default function Billing() {
       subTotal: lastBill.subTotal,
       gstAmount: lastBill.gstAmount,
       total: lastBill.total,
+      gross: lastBill.gross,
+      itemDiscountAmount: lastBill.itemDiscountAmount,
+      discountLabel: discountLabel(lastBill),
+      discountAmount: lastBill.discountAmount,
       paymentMethod: lastBill.paymentMethod,
       gstNumber: settings?.gstNumber,
     });
@@ -377,16 +595,26 @@ export default function Billing() {
     setTimeout(() => searchRef.current?.focus(), 50);
   };
 
-  const itemCount = billItems.length;
+  const itemCount = lines.length;
   const today = new Date().toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
 
   return (
     <div className="animate-fade-in-up">
       <div className="mx-auto max-w-screen-2xl space-y-6">
         {/* Header */}
+        <ModeTabs current={mode} />
         <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
           <div className="space-y-2">
-            <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-gray-900">New Bill</h1>
+            <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-gray-900 flex items-center gap-3">
+              <span className="w-11 h-11 rounded-full bg-emerald-700 text-white flex items-center justify-center shrink-0"><modeInfo.icon size={22} /></span>
+              {modeInfo.title}
+            </h1>
+            <p className="text-sm text-gray-500">
+              {modeInfo.blurb}
+              {mode === 'event' && <> · Box sizes {config.boxSizes.map(fmtLitres).join(', ')}</>}
+              {mode === 'stall' && <> · {scoopGrams} g per scoop</>}
+              {!isRetail && user?.role === 'admin' && <> · <Link to="/settings#billing-units" className="font-medium text-emerald-700 hover:underline">Change units</Link></>}
+            </p>
             <Steps current={1} />
           </div>
           <div className="flex flex-wrap gap-2 text-xs font-medium">
@@ -449,13 +677,17 @@ export default function Billing() {
                 <div className="py-16 text-center">
                   <IceCreamCone size={40} strokeWidth={1.25} className="mx-auto text-gray-300" />
                   <p className="mt-3 font-medium text-gray-700">No products found</p>
-                  <p className="text-sm text-gray-500">{products.length ? 'Try another name, SKU or category.' : 'Add products on the Stock page first.'}</p>
+                  <p className="text-sm text-gray-500">
+                    {!products.length ? 'Add products on the Stock page first.'
+                      : !sellable.length ? `${modeInfo.label} billing needs products stocked in g, kg, ml or ltr. Set the unit on the Stock page.`
+                      : 'Try another name, SKU or category.'}
+                  </p>
                 </div>
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
                   {filteredProducts.map((p) => {
-                    const out = p.stock <= 0;
-                    const inBill = qtyInBill(p._id);
+                    const out = isOut(p);
+                    const inBill = lineInBill(p._id);
                     return (
                       <button
                         key={p._id}
@@ -468,16 +700,17 @@ export default function Billing() {
                           <ProductThumb product={p} className="w-full h-full transition-transform duration-300 group-hover:scale-105" />
                           {inBill && (
                             <span className="absolute top-2 right-2 min-w-[1.75rem] h-7 px-2 rounded-full bg-emerald-700 text-white text-xs font-bold flex items-center justify-center shadow">
-                              {formatQty(inBill, unitOf(p))}
+                              {isRetail ? formatQty(inBill.quantity, unitOf(p)) : lineCountLabel(mode, inBill)}
                             </span>
                           )}
                           {out && <span className="absolute inset-x-0 bottom-0 bg-gray-900/80 text-white text-[11px] font-semibold uppercase tracking-wider text-center py-1">Out of stock</span>}
                         </div>
                         <div className="p-3">
                           <div className="font-semibold text-gray-900 text-sm leading-snug line-clamp-2 min-h-[2.5rem]">{p.itemName}</div>
-                          <div className="mt-1 font-bold text-emerald-700">₹{p.price}<span className="text-xs font-normal text-gray-500">{perLabel(p)}</span></div>
+                          <div className="mt-1 font-bold text-emerald-700">{priceLabel(p)}</div>
                           <div className={`mt-1 text-[11px] font-medium truncate ${isLowStock(p) && !out ? 'text-amber-600' : 'text-gray-500'}`}>
-                            {out ? 'None left' : `${formatStock(p.stock, p)} left`}
+                            {out ? (isRetail ? 'None left' : `Not enough for a ${countWord}`) : `${stockLeft(p)} left`}
+                            {!isRetail && <span className="text-gray-400"> · {formatQty(p.stock, unitOf(p))} in stock</span>}
                           </div>
                         </div>
                         {!out && (
@@ -508,16 +741,18 @@ export default function Billing() {
               )}
             </div>
 
+            {mode === 'stall' && <ScoopSize value={scoopInput} onChange={setScoopInput} fallback={config.scoopGrams} error={scoopError} />}
+
             <div className="flex-1 overflow-y-auto p-5">
               {itemCount === 0 ? (
                 <div className="py-10 text-center">
                   <div className="w-14 h-14 mx-auto rounded-full bg-emerald-50 text-emerald-700 flex items-center justify-center"><ShoppingBag size={24} /></div>
                   <p className="mt-3 font-medium text-gray-700">No items yet</p>
-                  <p className="text-sm text-gray-500">Tap a product to add it, then set the quantity.</p>
+                  <p className="text-sm text-gray-500">{mode === 'event' ? 'Tap a flavour, pick a box size, then the number of boxes.' : mode === 'stall' ? 'Tap a flavour to add a scoop; tap again for more.' : 'Tap a product to add it, then set the quantity.'}</p>
                 </div>
               ) : (
                 <ul className="space-y-4">
-                  {billItems.map((bi) => (
+                  {lines.map((bi, idx) => (
                     <li key={bi.item._id} className="flex gap-3 bill-rise">
                       <ProductThumb product={bi.item} className="w-12 h-12 rounded-lg shrink-0" />
                       <div className="flex-1 min-w-0">
@@ -525,12 +760,36 @@ export default function Billing() {
                           <div className="min-w-0">
                             <div className="font-medium text-gray-900 text-sm truncate">{bi.item.itemName}</div>
                             <div className="text-xs text-gray-500">
-                              ₹{bi.item.price}{perLabel(bi.item)}
+                              {mode === 'event' ? <>{inr(pricePerLitre(bi.item, gpl))}/L · {formatQty((Number(bi.boxSize) || 0) * (Number(bi.boxes) || 0))} L</>
+                                : mode === 'stall' ? <>{inr(pricePerScoop(bi.item, gpl, scoopGrams))}/scoop</>
+                                : <>₹{bi.item.price}{perLabel(bi.item)}</>}
                               {bi.item.gstIncluded && <span className="ml-1.5 px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-semibold uppercase">incl. GST</span>}
                             </div>
                           </div>
-                          <div className="font-semibold text-gray-900 text-sm whitespace-nowrap">{inr(bi.subtotal)}</div>
+                          <div className="text-right whitespace-nowrap">
+                            {lineDiscounts[idx] > 0 ? (
+                              <>
+                                <div className="text-[11px] text-gray-400 line-through">{inr(bi.subtotal)}</div>
+                                <div className="font-semibold text-emerald-700 text-sm">{inr(bi.subtotal - lineDiscounts[idx])}</div>
+                              </>
+                            ) : <div className="font-semibold text-gray-900 text-sm">{inr(bi.subtotal)}</div>}
+                          </div>
                         </div>
+                        {!isRetail && (
+                          <div className={`mt-1 text-[11px] font-medium ${bi.quantity > bi.item.stock ? 'text-red-600' : 'text-gray-500'}`}>
+                            Uses {formatQty(bi.quantity, unitOf(bi.item))} of {formatQty(bi.item.stock, unitOf(bi.item))} in stock
+                          </div>
+                        )}
+                        {mode === 'event' && (
+                          <div role="radiogroup" aria-label={`Box size for ${bi.item.itemName}`} className="mt-2 flex flex-wrap gap-1.5">
+                            {config.boxSizes.map((sz) => (
+                              <button key={sz} type="button" role="radio" aria-checked={Number(bi.boxSize) === sz} onClick={() => setBoxSize(bi.item._id, sz)}
+                                className={`px-2.5 h-7 text-xs font-semibold border transition-colors ${Number(bi.boxSize) === sz ? 'bg-gray-900 border-gray-900 text-white' : 'bg-white border-gray-200 text-gray-600 hover:border-gray-400'}`}>
+                                {fmtLitres(sz)}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                         <div className="mt-2 flex items-center justify-between">
                           <div className="flex items-center border border-gray-200 rounded-full p-0.5">
                             <button type="button" onClick={() => changeQuantity(bi.item._id, -1)} aria-label={`Decrease ${bi.item.itemName}`}
@@ -541,13 +800,14 @@ export default function Billing() {
                               type="number"
                               inputMode="decimal"
                               min="0"
-                              step={unitStep(bi.item)}
-                              value={bi.quantity}
+                              step={isRetail ? unitStep(bi.item) : 1}
+                              value={isRetail ? bi.quantity : bi[countField]}
                               onChange={(e) => setQuantity(bi.item._id, e.target.value)}
-                              aria-label={`Quantity in ${unitOf(bi.item)}`}
+                              aria-label={isRetail ? `Quantity in ${unitOf(bi.item)}` : `Number of ${countWord}s`}
                               className="w-14 h-8 text-center font-semibold text-sm text-gray-900 bg-transparent !border-0 !shadow-none outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                             />
-                            {unitOf(bi.item) !== 'pcs' && <span className="text-xs text-gray-400 pr-1">{unitOf(bi.item)}</span>}
+                            {isRetail ? unitOf(bi.item) !== 'pcs' && <span className="text-xs text-gray-400 pr-1">{unitOf(bi.item)}</span>
+                              : <span className="text-xs text-gray-400 pr-1">{mode === 'event' ? (Number(bi.boxes) === 1 ? 'box' : 'boxes') : (Number(bi.scoops) === 1 ? 'scoop' : 'scoops')}</span>}
                             <button type="button" onClick={() => changeQuantity(bi.item._id, 1)} aria-label={`Increase ${bi.item.itemName}`}
                               className="w-8 h-8 hover:bg-gray-100 flex items-center justify-center text-gray-600">
                               <Plus size={14} />
@@ -558,6 +818,46 @@ export default function Billing() {
                             <Trash2 size={16} />
                           </button>
                         </div>
+                        {bi.discOpen || (bi.discInput ?? '') !== '' ? (
+                          <div className="mt-2">
+                            <div className="flex items-center gap-1.5">
+                              <Tag size={13} className="text-gray-400 shrink-0" />
+                              <div role="radiogroup" aria-label={`Discount type for ${bi.item.itemName}`} className="flex shrink-0 border border-gray-200 bg-white">
+                                {[['amount', '₹'], ['percent', '%']].map(([t, sym]) => (
+                                  <button key={t} type="button" role="radio" aria-checked={(bi.discType || 'amount') === t}
+                                    aria-label={t === 'amount' ? 'Item discount in rupees' : 'Item discount in percent'}
+                                    onClick={() => setLineDiscount(bi.item._id, { discType: t })}
+                                    className={`w-8 h-8 text-xs font-semibold transition-colors ${(bi.discType || 'amount') === t ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
+                                    {sym}
+                                  </button>
+                                ))}
+                              </div>
+                              <input
+                                type="number"
+                                inputMode="decimal"
+                                min="0"
+                                step="0.01"
+                                autoFocus={bi.discOpen && (bi.discInput ?? '') === ''}
+                                placeholder="Item discount"
+                                value={bi.discInput ?? ''}
+                                onChange={(e) => setLineDiscount(bi.item._id, { discInput: e.target.value })}
+                                aria-label={`Discount for ${bi.item.itemName}`}
+                                aria-invalid={!!lineDiscountErrorOf[idx]}
+                                className={`flex-1 min-w-0 h-8 px-2.5 border bg-white text-xs outline-none ${lineDiscountErrorOf[idx] ? 'border-red-400' : 'border-gray-200'} [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`}
+                              />
+                              <button type="button" onClick={() => setLineDiscount(bi.item._id, { discInput: '', discOpen: false })} aria-label={`Remove discount on ${bi.item.itemName}`}
+                                className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100"><X size={14} /></button>
+                            </div>
+                            {lineDiscountErrorOf[idx]
+                              ? <p className="mt-1 text-[11px] text-red-600">{lineDiscountErrorOf[idx]}</p>
+                              : lineDiscounts[idx] > 0 && <p className="mt-1 text-[11px] text-emerald-700 font-medium">Saves {inr(lineDiscounts[idx])}</p>}
+                          </div>
+                        ) : (
+                          <button type="button" onClick={() => setLineDiscount(bi.item._id, { discOpen: true })}
+                            className="mt-1 flex items-center gap-1 text-xs font-medium text-emerald-700 hover:text-emerald-800">
+                            <Tag size={12} /> Add item discount
+                          </button>
+                        )}
                       </div>
                     </li>
                   ))}
@@ -566,10 +866,88 @@ export default function Billing() {
             </div>
 
             <div className="p-5 border-t border-gray-100 bg-gray-50/60 space-y-4">
+              {itemCount > 0 && (coupon ? (
+                <div className={`flex items-center gap-3 p-3 border ${couponShort ? 'border-amber-300 bg-amber-50' : 'border-emerald-300 bg-emerald-50'}`}>
+                  <TicketPercent size={20} className={couponShort ? 'text-amber-600 shrink-0' : 'text-emerald-700 shrink-0'} />
+                  <div className="flex-1 min-w-0">
+                    <div className="font-mono font-bold text-sm text-gray-900 tracking-wider">{coupon.code}</div>
+                    <div className={`text-xs ${couponShort ? 'text-amber-700' : 'text-emerald-800'}`}>
+                      {couponShort ? `Add ${inr(couponShort)} more to use this coupon` : `${offerText(coupon)} · saves ${inr(couponAmount)}`}
+                    </div>
+                  </div>
+                  <button type="button" onClick={removeCoupon} aria-label="Remove coupon" className="p-2 text-gray-400 hover:text-gray-700 hover:bg-white"><X size={16} /></button>
+                </div>
+              ) : couponOpen ? (
+                <form onSubmit={applyCoupon}>
+                  <label htmlFor="bill-coupon" className="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-1.5"><TicketPercent size={14} /> Coupon code</label>
+                  <div className="flex gap-2">
+                    <input id="bill-coupon" type="text" autoFocus autoComplete="off" maxLength={20} placeholder="e.g. MANGO20" value={couponInput}
+                      onChange={(e) => setCouponInput(e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, ''))}
+                      className="flex-1 min-w-0 h-10 px-3 border border-gray-200 bg-white text-sm font-mono tracking-wider outline-none placeholder:font-sans placeholder:tracking-normal" />
+                    <button type="submit" disabled={!couponInput.trim() || couponBusy}
+                      className="h-10 px-4 bg-gray-900 hover:bg-gray-800 disabled:opacity-50 text-white text-sm font-semibold flex items-center gap-1.5">
+                      {couponBusy ? <Loader2 size={15} className="animate-spin" /> : null} Apply
+                    </button>
+                    <button type="button" onClick={() => { setCouponOpen(false); setCouponInput(''); }} aria-label="Close coupon"
+                      className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100"><X size={16} /></button>
+                  </div>
+                </form>
+              ) : (
+                <button type="button" onClick={() => setCouponOpen(true)} className="w-full flex items-center gap-2 text-sm font-medium text-emerald-700 hover:text-emerald-800">
+                  <TicketPercent size={16} /> Have a coupon code?
+                </button>
+              ))}
+              {itemCount > 0 && !coupon && (
+                <div>
+                  <label htmlFor="bill-discount" className="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-1.5">
+                    <Tag size={14} /> {itemCount > 1 ? 'Overall discount' : 'Bill discount'} <span className="font-normal text-gray-400">(optional)</span>
+                  </label>
+                  <div className="flex gap-2">
+                    <div role="radiogroup" aria-label="Discount type" className="flex shrink-0 border border-gray-200 bg-white">
+                      {[['amount', '₹'], ['percent', '%']].map(([t, sym]) => (
+                        <button key={t} type="button" role="radio" aria-checked={discountType === t}
+                          aria-label={t === 'amount' ? 'Discount in rupees' : 'Discount in percent'}
+                          onClick={() => setDiscountType(t)}
+                          className={`w-10 h-10 text-sm font-semibold transition-colors ${discountType === t ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
+                          {sym}
+                        </button>
+                      ))}
+                    </div>
+                    <input
+                      id="bill-discount"
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      max={discountType === 'percent' ? 100 : undefined}
+                      step="0.01"
+                      placeholder={discountType === 'percent' ? 'e.g. 10' : 'e.g. 50'}
+                      value={discountInput}
+                      onChange={(e) => setDiscountInput(e.target.value)}
+                      aria-invalid={!!discountError}
+                      className={`flex-1 min-w-0 h-10 px-3 border bg-white text-sm outline-none ${discountError ? 'border-red-400' : 'border-gray-200'} [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`}
+                    />
+                    {discountInput !== '' && (
+                      <button type="button" onClick={() => setDiscountInput('')} aria-label="Remove discount"
+                        className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100"><X size={16} /></button>
+                    )}
+                  </div>
+                  {discountError && <p className="mt-1 text-xs text-red-600">{discountError}</p>}
+                </div>
+              )}
               <div className="space-y-1.5 text-sm">
-                <div className="flex justify-between text-gray-600"><span>Subtotal</span><span>{inr(subTotal)}</span></div>
+                {mode === 'event' && itemCount > 0 && <div className="flex justify-between text-gray-600"><span>Total volume</span><span className="font-medium text-gray-900">{formatQty(totalLitres)} L</span></div>}
+                {mode === 'stall' && itemCount > 0 && <div className="flex justify-between text-gray-600"><span>Total scoops</span><span className="font-medium text-gray-900">{totalScoops} × {scoopGrams} g</span></div>}
+                {anyDiscount && (
+                  <>
+                    <div className="flex justify-between text-gray-600"><span>Items total</span><span>{inr(gross)}</span></div>
+                    {itemDiscount > 0 && <div className="flex justify-between text-emerald-700 font-medium"><span>Item discounts</span><span>− {inr(itemDiscount)}</span></div>}
+                    {discountAmount > 0 && <div className="flex justify-between text-emerald-700 font-medium"><span>{discLabel}</span><span>− {inr(discountAmount)}</span></div>}
+                  </>
+                )}
+                <div className="flex justify-between text-gray-600"><span>{anyDiscount ? 'Taxable value' : 'Subtotal'}</span><span>{inr(subTotal)}</span></div>
                 <div className="flex justify-between text-gray-600"><span>GST (5%)</span><span>{inr(gstAmount)}</span></div>
                 {hasInclusive && <p className="text-xs text-gray-500">Items marked "incl. GST" already contain their GST.</p>}
+                {anyDiscount && <p className="text-xs text-gray-500">Discounts are taken off before GST{itemDiscount > 0 && discountAmount > 0 ? `; the ${coupon ? 'coupon' : 'overall discount'} applies after item discounts` : ''}.</p>}
                 <div className="flex justify-between items-baseline pt-2">
                   <span className="font-semibold text-gray-900">Total</span>
                   <span className="text-3xl font-bold text-emerald-700 tracking-tight">{inr(total)}</span>
@@ -770,11 +1148,23 @@ export default function Billing() {
                   <ul className="divide-y divide-dashed divide-gray-200 text-sm">
                     {lastBill.items.map((it, i) => (
                       <li key={i} className="flex justify-between gap-3 py-2">
-                        <span className="text-gray-700 truncate">{it.name} <span className="text-gray-400">× {it.qty}</span></span>
+                        <span className="text-gray-700 truncate">{it.name} <span className="text-gray-400">× {it.qty}</span>
+                          {it.discountAmount > 0 && <span className="block text-xs text-emerald-700">{it.discountLabel} − {inr(it.discountAmount)}</span>}
+                        </span>
                         <span className="font-medium text-gray-900 whitespace-nowrap">{inr(it.total)}</span>
                       </li>
                     ))}
                   </ul>
+                  {lastBill.itemDiscountAmount > 0 && (
+                    <div className="flex justify-between gap-3 pt-2 mt-1 border-t border-gray-200 text-sm text-emerald-700 font-medium">
+                      <span>Item discounts</span><span>− {inr(lastBill.itemDiscountAmount)}</span>
+                    </div>
+                  )}
+                  {lastBill.discountAmount > 0 && (
+                    <div className="flex justify-between gap-3 pt-2 mt-1 border-t border-gray-200 text-sm text-emerald-700 font-medium">
+                      <span>{discountLabel(lastBill)}</span><span>− {inr(lastBill.discountAmount)}</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="bill-rise p-4 border-t border-gray-100 grid grid-cols-2 gap-3" style={{ animationDelay: '0.8s' }}>
