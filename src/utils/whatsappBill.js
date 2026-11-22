@@ -1,3 +1,4 @@
+import { DEFAULT_GSTIN } from './shop';
 const inr = (n) => `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 
 // Small units are shown in their larger unit so rates read per litre / per kg: 500 g -> 0.5 kg
@@ -36,7 +37,7 @@ export const buildBillMessage = ({ customerName, invoice, items, subTotal, gstAm
     `Thank you for choosing *Ifrutico*!`,
     ``,
     `*Invoice:* ${invoice}`,
-    ...(gstNumber ? [`*GSTIN:* ${gstNumber}`] : []),
+    `*GSTIN:* ${gstNumber || DEFAULT_GSTIN}`,
     ``,
     `*YOUR ORDER*`,
     line,

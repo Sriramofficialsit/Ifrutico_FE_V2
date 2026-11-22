@@ -6,6 +6,7 @@ import { createPortal } from 'react-dom';
 import { useAuth } from '../Context/AuthContext';
 import BillingUnitsCard from '../Components/BillingUnitsCard';
 import PrintSettingsCard from '../Components/PrintSettingsCard';
+import { DEFAULT_GSTIN } from '../utils/shop';
 
 const defaultForm = {
   shopName: '',
@@ -177,7 +178,7 @@ export default function Settings() {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">GST Number</label>
                   <input type="text" name="gstNumber" value={formData.gstNumber} onChange={handleChange}
-                    placeholder="e.g. 33ABCDE1234F1Z5"
+                    placeholder={DEFAULT_GSTIN}
                     className="w-full h-11 px-4 rounded-lg border border-white/50 bg-white/50 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none transition-all" />
                 </div>
                 <div>
@@ -246,7 +247,7 @@ export default function Settings() {
             <div className="p-6 space-y-4">
               <p className="text-gray-700">Save the following settings?</p>
               <div className="bg-white/60 p-4 rounded-xl space-y-2 text-sm border border-white/50">
-                {[['Shop Name', formData.shopName], ['Phone', formData.phoneNumber], ['Address', formData.address], ['GST', formData.gstNumber || 'Not set']].map(([k, v]) => (
+                {[['Shop Name', formData.shopName], ['Phone', formData.phoneNumber], ['Address', formData.address], ['GST', formData.gstNumber || `${DEFAULT_GSTIN} (default)`]].map(([k, v]) => (
                   <div key={k} className="flex justify-between">
                     <span className="text-gray-500">{k}</span>
                     <span className="font-medium text-gray-900 text-right max-w-[60%] truncate">{v}</span>

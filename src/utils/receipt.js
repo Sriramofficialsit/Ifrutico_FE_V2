@@ -2,6 +2,7 @@
 // Shared by the New Bill screen and the Billing List so every printout looks the same.
 import DOMPurify from 'dompurify';
 import logoAsset from '../LandingApp/images/logo.webp';
+import { DEFAULT_GSTIN } from './shop';
 
 // Absolute URL so the logo also loads inside the print window (about:blank)
 const logoSrc = () => (typeof window !== 'undefined' ? new URL(logoAsset, window.location.origin).href : logoAsset);
@@ -169,7 +170,7 @@ export function buildReceiptHtml(bill, shop = {}) {
   <div class="center">
     <img class="logo" src="${esc(logoSrc())}" alt="${esc(name)}">
     <div class="brand">${esc(name)}</div>
-    <div class="addr">${[shop.address, shop.phoneNumber ? `Ph: ${shop.phoneNumber}` : '', shop.gstNumber ? `GSTIN: ${shop.gstNumber}` : ''].filter(Boolean).map(esc).join('<br>')}</div>
+    <div class="addr">${[shop.address, shop.phoneNumber ? `Ph: ${shop.phoneNumber}` : '', `GSTIN: ${shop.gstNumber || DEFAULT_GSTIN}`].filter(Boolean).map(esc).join('<br>')}</div>
   </div>
 
   <div class="title">TAX INVOICE</div>
