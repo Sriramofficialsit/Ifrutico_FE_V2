@@ -26,6 +26,7 @@ import {
   Megaphone,
   Mail,
   TicketPercent,
+  Sheet,
 } from 'lucide-react';
 
 const menuItems = [
@@ -42,6 +43,7 @@ const menuItems = [
   { path: '/bills', icon: FileText, label: 'Billing List', adminOnly: true },
   { path: '/customers', icon: Contact, label: 'Customers', adminOnly: true },
   { path: '/reports', icon: BarChart3, label: 'Reports' },
+  { path: '/records', icon: Sheet, label: 'Records', adminOnly: true },
   { path: '/team', icon: Users, label: 'Branch Management', adminOnly: true },
   { path: '/login-activity', icon: History, label: 'Login Activity', adminOnly: true },
   { path: '/menu-leads', icon: PhoneCall, label: 'Menu Leads', adminOnly: true },

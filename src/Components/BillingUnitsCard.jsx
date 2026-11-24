@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
-import { Save, X, Plus, IceCreamCone, PartyPopper, Scale } from 'lucide-react';
+import { Save, X, Plus, IceCreamCone, PartyPopper, Scale, Store } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { apiFetch } from '../utils/api';
 import { DEFAULT_BILLING_CONFIG, fmtLitres } from '../utils/billModes';
+import { UNITS } from '../utils/units';
 
 const inputCls = 'w-full h-11 px-4 rounded-lg border border-white/50 bg-white/50 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none transition-all';
 
-// Admin: the central units every branch uses for Events & Functions (litre boxes) and Stalls (scoops)
+// Admin: the central units every branch uses — Retail's default measure, Events & Functions (litre boxes) and Stalls (scoops)
 export default function BillingUnitsCard() {
   const [cfg, setCfg] = useState(DEFAULT_BILLING_CONFIG);
   const [scoop, setScoop] = useState(String(DEFAULT_BILLING_CONFIG.scoopGrams));
@@ -52,7 +53,7 @@ export default function BillingUnitsCard() {
     if (!(gramsPerLitre >= 100 && gramsPerLitre <= 2000)) { toast.error('Weight per litre must be 100–2000 g.'); return; }
     setSaving(true);
     try {
-      const res = await apiFetch('/billing-config', { method: 'PUT', body: { scoopGrams, gramsPerLitre, boxSizes: cfg.boxSizes } });
+      const res = await apiFetch('/billing-config', { method: 'PUT', body: { scoopGrams, gramsPerLitre, boxSizes: cfg.boxSizes, retailUnit: cfg.retailUnit || '' } });
       setCfg(res.data);
       toast.success('Billing units saved for all branches');
     } catch (err) {
@@ -66,16 +67,24 @@ export default function BillingUnitsCard() {
     <section id="billing-units" className="scroll-mt-28 bg-white/60 backdrop-blur-xl rounded-2xl border border-white/70 shadow-sm overflow-hidden">
       <div className="px-6 py-5 border-b border-white/60">
         <h2 className="text-xl md:text-2xl font-semibold text-gray-900">Billing Units</h2>
-        <p className="text-sm text-gray-500 mt-1">Shared by every branch. Events & Functions and Stalls bills use these to take stock out of the central inventory.</p>
+        <p className="text-sm text-gray-500 mt-1">Shared by every branch. Retail, Events & Functions and Stalls bills use these to measure sales and take stock out of the central inventory.</p>
       </div>
-      <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="p-6 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
+        <div>
+          <label htmlFor="cfg-retail-unit" className="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-1.5"><Store size={15} className="text-emerald-700" /> Retail default measure</label>
+          <select id="cfg-retail-unit" value={cfg.retailUnit || ''} onChange={(e) => setCfg({ ...cfg, retailUnit: e.target.value })} className={inputCls}>
+            <option value="">Each product's own unit</option>
+            {UNITS.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}
+          </select>
+          <p className="mt-1 text-xs text-gray-500">New retail lines start in this measure and cards show the rate per it. Products that can't be converted keep their own unit; staff can still switch units on each line.</p>
+        </div>
         <div>
           <label htmlFor="cfg-scoop" className="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-1.5"><IceCreamCone size={15} className="text-emerald-700" /> Stall scoop size (g)</label>
           <input id="cfg-scoop" type="number" min="10" max="1000" step="5" value={scoop} onChange={(e) => setScoop(e.target.value)} className={inputCls} />
           <p className="mt-1 text-xs text-gray-500">Default for each stall bill; staff can change it per bill.</p>
         </div>
         <div>
-          <span className="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-1.5"><PartyPopper size={15} className="text-emerald-700" /> Event box sizes (litres)</span>
+          <span className="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-1.5"><PartyPopper size={15} className="text-emerald-700" /> Suggested event box sizes (litres) — any custom size can still be typed at billing</span>
           <div className="flex flex-wrap gap-1.5 mb-2">
             {cfg.boxSizes.map((b) => (
               <span key={b} className="inline-flex items-center gap-1 pl-3 pr-1 h-8 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm font-semibold">

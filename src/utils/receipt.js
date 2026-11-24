@@ -66,6 +66,7 @@ const lineOf = (p) => {
   const total = Number(p.total) || 0;
   if (p.boxes > 0) return { qty: `${p.boxes}×${num(p.boxSize)}L`, rate: total / p.boxes, note: `${p.boxes} box${p.boxes === 1 ? '' : 'es'} of ${num(p.boxSize)} L` };
   if (p.scoops > 0) return { qty: `${p.scoops}`, rate: total / p.scoops, note: `${p.scoops} scoop${p.scoops === 1 ? '' : 's'} × ${num(p.scoopGrams)} g` };
+  if (p.soldQty > 0 && p.soldUnit) return { qty: p.soldUnit === 'pcs' ? num(p.soldQty) : `${num(p.soldQty)}${p.soldUnit === 'ltr' ? 'L' : p.soldUnit}`, rate: total / p.soldQty, note: p.soldUnit === 'pcs' ? '' : `₹${money(total / p.soldQty)} / ${p.soldUnit}` };
   let unit = p.unit || 'pcs';
   let qty = Number(p.quantity) || 0;
   let rate = (Number(p.price) || 0) / (Number(p.priceQty) || 1);
@@ -89,7 +90,7 @@ export function buildReceiptHtml(bill, shop = {}) {
   const gst = r2(bill.gstAmount);
   const cgst = r2(gst / 2);
   const sgst = r2(gst - cgst);
-  const units = items.reduce((s, p) => s + (p.boxes || p.scoops || (p.unit === 'pcs' || !p.unit ? Number(p.quantity) || 0 : 1)), 0);
+  const units = items.reduce((s, p) => s + (p.boxes || p.scoops || (p.soldUnit === 'pcs' ? Number(p.soldQty) || 0 : p.soldUnit ? 1 : p.unit === 'pcs' || !p.unit ? Number(p.quantity) || 0 : 1)), 0);
   const itemSaved = r2(bill.itemDiscountAmount);
   const billSaved = r2(bill.discountAmount);
   const saved = r2(itemSaved + billSaved);

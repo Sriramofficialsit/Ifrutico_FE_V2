@@ -18,6 +18,7 @@ export default function TopBar({ collapsed, mobileOpen, setMobileOpen }) {
     if (path.includes('bills'))      return 'Billing List';
     if (path.includes('customers'))  return 'Customers';
     if (path.includes('reports'))    return 'Reports';
+    if (path.includes('records'))    return 'Records';
     if (path.includes('login-activity')) return 'Login Activity';
     if (path.includes('team'))       return 'Branch Management';
     if (path.includes('menu-leads')) return 'Menu Leads';
@@ -47,7 +48,7 @@ export default function TopBar({ collapsed, mobileOpen, setMobileOpen }) {
       <div className="mx-auto h-full max-w-screen-2xl pr-4 sm:pr-6 lg:pr-8 pl-4 sm:pl-6 lg:pl-8 flex items-center justify-between">
 
         {/* Left — page title */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 min-w-0 flex-1">
           <button
             onClick={() => setMobileOpen(true)}
             className="md:hidden flex items-center justify-center w-10 h-10 -ml-1 border border-black/20 text-black/80 hover:bg-black/5 flex-shrink-0"
@@ -55,13 +56,13 @@ export default function TopBar({ collapsed, mobileOpen, setMobileOpen }) {
           >
             <Menu size={20} />
           </button>
-          <h1 className="sb-topbar-title text-xl sm:text-2xl tracking-tight font-semibold">
+          <h1 className="sb-topbar-title hidden min-[400px]:block text-lg sm:text-2xl tracking-tight font-semibold truncate min-w-0">
             {getPageTitle()}
           </h1>
         </div>
 
         {/* Right — time + user */}
-        <div className="flex items-center gap-3 sm:gap-5">
+        <div className="flex items-center gap-2 sm:gap-4 xl:gap-5 shrink-0 pl-2">
           <button
             type="button"
             onClick={toggleTheme}
@@ -79,8 +80,8 @@ export default function TopBar({ collapsed, mobileOpen, setMobileOpen }) {
           </button>
           <LiveClock />
 
-          <div className="flex items-center gap-3">
-            <div className="text-right hidden md:block">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className="text-right hidden xl:block">
               <div className="text-sm font-semibold text-gray-900">
                 {getGreeting()}, {user?.name?.split(' ')[0] || 'User'}
               </div>
@@ -95,7 +96,7 @@ export default function TopBar({ collapsed, mobileOpen, setMobileOpen }) {
               onClick={handleLogout}
               title="Logout"
               aria-label="Logout"
-              className="p-2.5 text-black/50 hover:text-red-600 hover:bg-red-50"
+              className="hidden xl:block p-2.5 text-black/50 hover:text-red-600 hover:bg-red-50"
             >
               <LogOut size={18} />
             </button>
@@ -136,23 +137,71 @@ function LiveClock() {
   }, []);
 
   const p = partsOf(now);
+  const [h1, h2] = p.hm.slice(0, 2);
+  const [m1, m2] = p.hm.slice(3, 5);
+  const [s1, s2] = p.ss;
+  const blink = Number(p.ss) % 2 === 0;
   return (
-    <div className="sb-clock flex items-center gap-2 sm:gap-3 pl-2.5 pr-3 sm:pl-3 sm:pr-4 h-9 sm:h-10 rounded-full" role="timer" aria-live="off" aria-label={`${p.date}, ${p.hm}:${p.ss} ${p.ampm} India time`}>
-      <span className="flex items-center gap-1.5">
-        <span className="relative flex h-2 w-2">
-          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-60" />
-          <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+    <div
+      className="sb-led flex items-center gap-2 sm:gap-3 h-9 sm:h-11 pl-2 pr-2.5 sm:pl-3 sm:pr-3.5 rounded-xl"
+      role="timer" aria-live="off" aria-label={`${p.date}, ${p.hm}:${p.ss} ${p.ampm} India time`}
+    >
+      {/* Left: live indicator + date */}
+      <div className="hidden lg:flex flex-col justify-center leading-none gap-1" aria-hidden="true">
+        <span className="flex items-center gap-1">
+          <span className="sb-led-dot" />
+          <span className="sb-led-label">Live</span>
         </span>
-        <span className="hidden sm:inline text-[10px] font-extrabold uppercase tracking-[0.18em] text-emerald-600">Live</span>
-      </span>
-      <span className="hidden lg:inline text-xs font-semibold text-gray-500 whitespace-nowrap">{p.date}</span>
-      <span className="hidden lg:inline w-px h-4 bg-gray-300" aria-hidden="true" />
-      <span className="flex items-baseline gap-1 font-bold tabular-nums text-gray-900 whitespace-nowrap">
-        <span className="text-sm sm:text-[15px] tracking-tight">{p.hm}</span>
-        <span key={p.ss} className="sb-clock-sec text-xs text-emerald-600">:{p.ss}</span>
-        <span className="text-[10px] font-bold text-gray-500 ml-0.5">{p.ampm}</span>
-        <span className="hidden xl:inline text-[10px] font-semibold text-gray-400 ml-1">IST</span>
-      </span>
+        <span className="hidden lg:block sb-led-label sb-led-dim whitespace-nowrap">{p.date}</span>
+      </div>
+      <span className="hidden lg:block sb-led-divider" aria-hidden="true" />
+
+      {/* Main: HH:MM */}
+      <div className="flex items-center" aria-hidden="true">
+        <SegDigit ch={h1} className="h-[18px] sm:h-[26px]" />
+        <SegDigit ch={h2} className="h-[18px] sm:h-[26px]" />
+        <span className={`sb-led-colon ${blink ? 'is-on' : ''}`}><i /><i /></span>
+        <SegDigit ch={m1} className="h-[18px] sm:h-[26px]" />
+        <SegDigit ch={m2} className="h-[18px] sm:h-[26px]" />
+      </div>
+
+      {/* Right: seconds over AM/PM */}
+      <div className="flex flex-col items-start justify-center gap-[3px]" aria-hidden="true">
+        <div className="hidden sm:flex">
+          <SegDigit ch={s1} className="h-[12px] sm:h-[13px]" />
+          <SegDigit ch={s2} className="h-[12px] sm:h-[13px]" />
+        </div>
+        <span className="flex gap-1 sb-led-label leading-none">
+          <span className={p.ampm === 'AM' ? 'sb-led-on' : 'sb-led-off'}>AM</span>
+          <span className={p.ampm === 'PM' ? 'sb-led-on' : 'sb-led-off'}>PM</span>
+        </span>
+      </div>
     </div>
+  );
+}
+
+// Seven-segment digit (SVG). Unlit segments stay faintly visible, like a real LED display.
+const SEGS = {
+  a: '2.5,0 9.5,0 10.5,1 9.5,2 2.5,2 1.5,1',
+  b: '11,1.5 12,2.5 12,8.5 11,9.5 10,8.5 10,2.5',
+  c: '11,10.5 12,11.5 12,17.5 11,18.5 10,17.5 10,11.5',
+  d: '2.5,18 9.5,18 10.5,19 9.5,20 2.5,20 1.5,19',
+  e: '1,10.5 2,11.5 2,17.5 1,18.5 0,17.5 0,11.5',
+  f: '1,1.5 2,2.5 2,8.5 1,9.5 0,8.5 0,2.5',
+  g: '2.5,9 9.5,9 10.5,10 9.5,11 2.5,11 1.5,10',
+};
+const DIGIT_SEGS = {
+  0: 'abcdef', 1: 'bc', 2: 'abdeg', 3: 'abcdg', 4: 'bcfg',
+  5: 'acdfg', 6: 'acdefg', 7: 'abc', 8: 'abcdefg', 9: 'abcdfg',
+};
+
+function SegDigit({ ch, className = '' }) {
+  const on = DIGIT_SEGS[ch] || '';
+  return (
+    <svg viewBox="-1.5 -0.5 15 21" className={`sb-seg w-auto ${className}`}>
+      {Object.entries(SEGS).map(([k, pts]) => (
+        <polygon key={k} points={pts} className={on.includes(k) ? 'on' : 'off'} />
+      ))}
+    </svg>
   );
 }

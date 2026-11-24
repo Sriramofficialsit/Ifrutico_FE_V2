@@ -18,6 +18,7 @@
     "chart.js": "^4.5.1",
     "dompurify": "^3.4.0",
     "emailjs": "^5.0.0",
+    "exceljs": "^4.4.0",
     "framer-motion": "^12.38.0",
     "gl-matrix": "^3.4.4",
     "gsap": "^3.15.0",

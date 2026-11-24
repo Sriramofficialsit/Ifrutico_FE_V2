@@ -1,13 +1,56 @@
 import { useState, useEffect } from 'react';
-import { UNITS, unitOf, isLowStock, formatQty, priceQtyOf, perLabel, toPacks, fromPacks, formatStock, stockUnitLabel } from '../utils/units';
-import { Plus, Edit, AlertCircle, X, Trash2, ArrowRightLeft, Layers, Image as ImageIcon } from 'lucide-react';
+import { DEFAULT_BILLING_CONFIG, pricePer, linksOf } from '../utils/billModes';
+import { unitOf, isLowStock, formatQty, priceQtyOf, perLabel, toPacks, fromPacks, formatStock, stockUnitLabel } from '../utils/units';
+import { Plus, Edit, AlertCircle, X, Trash2, ArrowRightLeft, Layers, Check, Image as ImageIcon, FileSpreadsheet, Loader2 } from 'lucide-react';
 import { useAuth } from '../Context/AuthContext';
 import { apiFetch, assetUrl } from '../utils/api';
 import { createPortal } from 'react-dom';
 import toast from 'react-hot-toast';
+import { exportXlsx, stamp } from '../utils/xlsx';
 
 const PRESET_CATEGORIES = ["fruits", "vegetables", "flowers", "nuts", "spices", "herbals"];
 const CUSTOM = "__custom__"; // category <select> value that reveals the free-text input
+
+// One box / pack of a product in all three measures. Price and stock are per box; the box ratios
+// (weight : volume : pcs/scoops) drive every conversion in Retail, Events (litres) and Stalls (scoops / pcs).
+const BOX_DIMS = [
+  { key: 'weight', label: 'Weight', qty: 'wQty', unit: 'wUnit', units: [['kg', 'kg'], ['g', 'g']], chips: { kg: [1, 2, 4, 5], g: [250, 500, 1000] } },
+  { key: 'volume', label: 'Volume', qty: 'vQty', unit: 'vUnit', units: [['ltr', 'ltr'], ['ml', 'ml']], chips: { ltr: [1, 2, 4, 5], ml: [250, 500, 1000] } },
+  { key: 'count', label: 'Pieces / Scoops', qty: 'cQty', unit: 'cUnit', units: [['pcs', 'pcs'], ['scoop', 'scoops']], chips: { pcs: [1, 6, 12, 24], scoop: [20, 40, 50, 60] } },
+];
+const EMPTY_BOX = { wQty: '', wUnit: 'kg', vQty: '', vUnit: 'ltr', cQty: '', cUnit: 'pcs', track: 'weight' };
+const r3n = (n) => Math.round(n * 1000) / 1000;
+// Form fields -> what is saved: stock unit + amount per box (priceQty) + box contents in g / ml / count
+const boxOf = (f) => {
+  const dims = BOX_DIMS.filter((d) => Number(f[d.qty]) > 0);
+  const track = dims.find((d) => d.key === f.track) || dims[0];
+  return {
+    dims,
+    track: track?.key,
+    unit: track ? f[track.unit] : 'pcs',
+    priceQty: track ? Number(f[track.qty]) : 1,
+    packWeight: Number(f.wQty) > 0 ? r3n(Number(f.wQty) * (f.wUnit === 'kg' ? 1000 : 1)) : 0,
+    packVolume: Number(f.vQty) > 0 ? r3n(Number(f.vQty) * (f.vUnit === 'ltr' ? 1000 : 1)) : 0,
+    packCount: Number(f.cQty) > 0 ? Number(f.cQty) : 0,
+    packCountUnit: f.cUnit,
+  };
+};
+// Saved product -> form fields (older products without box contents are filled from their unit / piece weight / density)
+const boxFromItem = (item) => {
+  const u = unitOf(item);
+  const q = priceQtyOf(item);
+  const W = Number(item.packWeight) || (u === 'kg' ? q * 1000 : u === 'g' ? q : u === 'pcs' && Number(item.pieceGrams) > 0 ? q * Number(item.pieceGrams) : 0);
+  const V = Number(item.packVolume) || (u === 'ltr' ? q * 1000 : u === 'ml' ? q : W && Number(item.gramsPerLitre) > 0 ? (W / Number(item.gramsPerLitre)) * 1000 : 0);
+  const N = Number(item.packCount) || (u === 'pcs' || u === 'scoop' ? q : 0);
+  const wUnit = u === 'g' || (W > 0 && W < 1000 && u !== 'kg') ? 'g' : 'kg';
+  const vUnit = u === 'ml' || (V > 0 && V < 1000 && u !== 'ltr') ? 'ml' : 'ltr';
+  return {
+    wQty: W ? String(r3n(wUnit === 'kg' ? W / 1000 : W)) : '', wUnit,
+    vQty: V ? String(r3n(vUnit === 'ltr' ? V / 1000 : V)) : '', vUnit,
+    cQty: N ? String(N) : '', cUnit: item.packCountUnit || (u === 'scoop' ? 'scoop' : 'pcs'),
+    track: u === 'kg' || u === 'g' ? 'weight' : u === 'ltr' || u === 'ml' ? 'volume' : 'count',
+  };
+};
 
 export default function Stock() {
   const { user } = useAuth();
@@ -34,6 +77,7 @@ export default function Stock() {
   const LIMIT = 10;
   
   const [submitting, setSubmitting] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const [formData, setFormData] = useState({
     itemName: '',
@@ -41,11 +85,11 @@ export default function Stock() {
     category: 'fruits',
     customCategory: '',
     price: '',
-    priceQty: '1', // price is for this many units, e.g. ₹120 per 500 g
-    unit: 'pcs',
     gstIncluded: false, // false = price is before GST (5% added at billing)
-    stock: '',
+    stock: '', // in boxes
+    ...EMPTY_BOX, // box contents: weight / volume / pcs-or-scoops, and which one stock is tracked in
   });
+  const [billingCfg, setBillingCfg] = useState(DEFAULT_BILLING_CONFIG);
   const [imageFiles, setImageFiles] = useState([]);
   const [categories, setCategories] = useState(PRESET_CATEGORIES);
 
@@ -72,6 +116,11 @@ export default function Stock() {
     }, 400);
     return () => clearTimeout(timer);
   }, [search, branchFilter]);
+
+  // Scoop size and grams per litre, for the auto-calculated prices in the product form
+  useEffect(() => {
+    apiFetch('/billing-config').then((d) => d.data && setBillingCfg({ ...DEFAULT_BILLING_CONFIG, ...d.data })).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -172,6 +221,46 @@ export default function Stock() {
   const viewingBranch = isAdmin && branchFilter !== 'central';
   const branchName = branches.find((b) => b._id === branchFilter)?.name;
 
+  // Export every product matching the current search / branch view (fetched in pages of 1000)
+  const handleExport = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const rows = [];
+      for (let p = 1, pages = 1; p <= pages && p <= 100; p++) {
+        let url = `/product/fetch?page=${p}&limit=1000`;
+        if (search.trim()) url += `&search=${encodeURIComponent(search.trim())}`;
+        if (isAdmin && branchFilter !== 'central') url += `&branch=${branchFilter}`;
+        const data = await apiFetch(url);
+        rows.push(...(data.data || []));
+        pages = data.totalPages || 1;
+      }
+      if (!rows.length) { toast.error('No items to export'); return; }
+      const stockLabel = viewingBranch ? `${branchName || 'Branch'} Stock` : isAdmin ? 'Central Stock' : 'Stock';
+      const columns = [
+        { header: 'SKU', key: 'sku', width: 16 },
+        { header: 'Item Name', key: 'itemName', width: 28 },
+        { header: 'Category', key: 'category', width: 16 },
+        { header: 'Price', value: (i) => Number(i.price) || 0, numFmt: '#,##0.00' },
+        { header: 'Price Per', value: (i) => perLabel(i).replace(/^\//, '') || unitOf(i), width: 14 },
+        { header: 'GST', value: (i) => (i.gstIncluded ? 'Incl. GST' : '+5% GST') },
+        { header: `${stockLabel} (boxes)`, value: (i) => toPacks(i.stock, i), numFmt: '#,##0.###', width: 20 },
+        { header: 'Box Size', value: (i) => stockUnitLabel(i), width: 18 },
+        { header: `${stockLabel} (qty)`, value: (i) => Number(i.stock) || 0, numFmt: '#,##0.###', width: 18 },
+        { header: 'Stock Unit', value: (i) => unitOf(i) },
+        { header: 'Low Stock', value: (i) => (isLowStock(i) ? 'Yes' : 'No') },
+      ];
+      if (isAdmin && !viewingBranch) {
+        columns.push({ header: 'Branches', value: (i) => (i.branchStocks || []).map((b) => `${b.branchName}: ${formatStock(b.stock, i)}`).join('; '), width: 40 });
+      }
+      await exportXlsx({ fileName: `Stock_${stamp()}`, sheetName: 'Stock', columns, rows });
+    } catch (err) {
+      toast.error(err.message || 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const openModal = (item = null) => {
     setImageFiles([]);
     apiFetch('/product/categories')
@@ -185,10 +274,9 @@ export default function Stock() {
         category: item.category || 'fruits',
         customCategory: '',
         price: item.price !== undefined ? item.price.toString() : '',
-        priceQty: String(priceQtyOf(item)),
-        unit: unitOf(item),
         gstIncluded: !!item.gstIncluded,
         stock: item.stock !== undefined ? String(toPacks(item.stock, item)) : '',
+        ...boxFromItem(item),
       });
     } else {
       setCurrentItem(null);
@@ -198,10 +286,9 @@ export default function Stock() {
         category: 'fruits',
         customCategory: '',
         price: '',
-        priceQty: '1',
-        unit: 'pcs',
         gstIncluded: false,
         stock: '',
+        ...EMPTY_BOX,
       });
     }
     setIsModalOpen(true);
@@ -230,8 +317,13 @@ export default function Stock() {
       toast.error('Enter a category name');
       return;
     }
-    if (!(Number(formData.priceQty) > 0)) {
-      toast.error('Quantity must be greater than 0');
+    const box = boxOf(formData);
+    if (!box.dims.length) {
+      toast.error('Enter what one box holds: weight, volume and/or pcs / scoops');
+      return;
+    }
+    if (box.packCount && box.packCountUnit === 'pcs' && !Number.isInteger(box.packCount)) {
+      toast.error('Pieces per box must be a whole number');
       return;
     }
 
@@ -241,10 +333,17 @@ export default function Stock() {
     if (!currentItem) payload.append('sku', formData.sku.trim().toUpperCase());
     payload.append('category', category);
     payload.append('price', formData.price);
-    payload.append('priceQty', formData.priceQty);
-    payload.append('unit', formData.unit);
+    payload.append('priceQty', String(box.priceQty));
+    payload.append('unit', box.unit);
+    payload.append('packWeight', String(box.packWeight));
+    payload.append('packVolume', String(box.packVolume));
+    payload.append('packCount', String(box.packCount));
+    payload.append('packCountUnit', box.packCountUnit);
     payload.append('gstIncluded', formData.gstIncluded ? 'true' : 'false');
-    payload.append('stock', String(fromPacks(formData.stock, formData)));
+    payload.append('stock', String(fromPacks(formData.stock, box)));
+    // The box contents supersede the older single links
+    payload.append('pieceGrams', '0');
+    payload.append('gramsPerLitre', '0');
     
     imageFiles.forEach(file => {
       payload.append('images', file);
@@ -292,12 +391,21 @@ export default function Stock() {
             </p>
           </div>
 
+          <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={handleExport}
+            disabled={exporting || loading || items.length === 0}
+            className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white font-semibold flex items-center gap-2 transition-all shadow-lg shadow-emerald-500/20 disabled:opacity-50"
+          >
+            {exporting ? <Loader2 size={18} className="animate-spin" /> : <FileSpreadsheet size={18} />} Export
+          </button>
           {isAdmin && <button
             onClick={() => openModal()}
           className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white font-semibold flex items-center gap-2 transition-all shadow-lg shadow-emerald-500/20"
           >
             <Plus size={18} /> Add New Item
           </button>}
+          </div>
         </div>
 
         <div className="bg-white/60 backdrop-blur-xl rounded-2xl border border-white/70 shadow-sm p-4 md:p-6 mb-6 animate-fade-in-up opacity-0 stagger-1">
@@ -595,7 +703,7 @@ export default function Stock() {
 
       {isModalOpen && createPortal(
         <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-50 p-4 transition-all animate-fade-in">
-          <div className="bg-white/80 backdrop-blur-2xl rounded-3xl shadow-2xl border border-white/60 max-w-lg w-full max-h-[90vh] flex flex-col overflow-hidden animate-zoom-in">
+          <div className="bg-white/80 backdrop-blur-2xl rounded-3xl shadow-2xl border border-white/60 max-w-xl w-full max-h-[90vh] flex flex-col overflow-hidden animate-zoom-in">
             <div className="flex items-center justify-between p-6 border-b border-gray-100">
               <div>
                 <h2 className="text-2xl font-bold text-gray-900">{currentItem ? 'Edit Product' : 'Add New Product'}</h2>
@@ -670,59 +778,140 @@ export default function Stock() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-semibold mb-2 text-gray-700">Unit of Measure</label>
-                      <select
-                        name="unit"
-                        value={formData.unit}
-                        onChange={handleInputChange}
-                        className="w-full h-12 px-4 rounded-xl border border-gray-200 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 outline-none bg-white shadow-sm cursor-pointer"
-                      >
-                        {UNITS.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-semibold mb-2 text-gray-700">Quantity ({formData.unit})</label>
-                      <input
-                        type="number"
-                        name="priceQty"
-                        value={formData.priceQty}
-                        onChange={handleInputChange}
-                        required
-                        min="0.001"
-                        step={formData.unit === 'pcs' ? '1' : '0.001'}
-                        placeholder="e.g. 500"
-                        className="w-full h-12 px-4 rounded-xl border border-gray-200 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 outline-none transition-all shadow-sm"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-semibold mb-2 text-gray-700">Price (₹ per {formatQty(Number(formData.priceQty) > 0 ? formData.priceQty : 1, formData.unit)}{formData.unit === 'pcs' ? ' pcs' : ''})</label>
-                      <input 
-                        type="number" 
-                        name="price" 
-                        value={formData.price} 
-                        onChange={handleInputChange} 
-                        required 
-                        min="0" 
-                        step="0.01" 
-                        className="w-full h-12 px-4 rounded-xl border border-gray-200 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 outline-none transition-all shadow-sm" 
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-semibold mb-2 text-gray-700">{currentItem ? 'Stock' : 'Initial Stock'} ({stockUnitLabel(formData)})</label>
-                      <input 
-                        type="number" 
-                        name="stock" 
-                        value={formData.stock} 
-                        onChange={handleInputChange} 
-                        required 
-                        min="0" 
-                        step={formData.unit === 'pcs' && priceQtyOf(formData) === 1 ? '1' : '0.001'}
-                        className="w-full h-12 px-4 rounded-xl border border-gray-200 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 outline-none transition-all shadow-sm" 
-                      />
-                    </div>
-                  </div>
+                  {(() => {
+                    const box = boxOf(formData);
+                    const draft = { ...box, price: Number(formData.price) || 0 };
+                    const fmt = (v) => `₹${Number(v.toFixed(2)).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+                    const cWord = formData.cUnit === 'scoop' ? 'scoop' : 'pc';
+                    const l = linksOf(draft, billingCfg);
+                    const tiles = [
+                      ['kg', '1 kg'], ['ltr', '1 ltr'], [formData.cUnit, `1 ${cWord}`],
+                    ].map(([u, label]) => ({ u, label, v: draft.price > 0 ? pricePer(u, draft, billingCfg) : null }));
+                    return (
+                      <>
+                        <div>
+                          <label className="block text-sm font-semibold text-gray-700">One box / pack holds</label>
+                          <p className="text-xs text-gray-500 mt-0.5 mb-2">Fill in all three for the most accurate stock across Retail, Events (litres) and Stalls (scoops / pcs). Price and stock below are per box.</p>
+                          <div className="rounded-2xl border border-gray-200 bg-white divide-y divide-gray-100 overflow-hidden">
+                            {BOX_DIMS.map((d) => {
+                              const on = Number(formData[d.qty]) > 0;
+                              const tracked = box.track === d.key;
+                              const unitWord = formData[d.unit] === 'scoop' ? 'scoops' : formData[d.unit];
+                              return (
+                                <div key={d.key} className={`p-3 sm:p-4 transition-colors ${tracked ? 'bg-emerald-50/70' : ''}`}>
+                                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                                    <span className="text-sm font-semibold text-gray-800">{d.label}</span>
+                                    {tracked ? (
+                                      <span className="inline-flex items-center gap-1 px-2.5 h-7 rounded-full bg-emerald-700 text-white text-xs font-semibold">
+                                        <Check size={13} /> Stock tracked in {unitWord}
+                                      </span>
+                                    ) : (
+                                      <button type="button" disabled={!on} onClick={() => setFormData((prev) => ({ ...prev, track: d.key }))}
+                                        className={`px-2.5 h-7 rounded-full border text-xs font-semibold transition-colors ${on ? 'border-emerald-600 text-emerald-700 hover:bg-emerald-50' : 'border-gray-200 text-gray-400 cursor-not-allowed'}`}>
+                                        {on ? `Track stock in ${unitWord}` : 'Enter a value to track'}
+                                      </button>
+                                    )}
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <input type="number" inputMode="decimal" min="0" step={d.key === 'count' && formData.cUnit === 'pcs' ? '1' : '0.001'} value={formData[d.qty]}
+                                      onChange={(e) => setFormData((prev) => ({ ...prev, [d.qty]: e.target.value }))}
+                                      placeholder={`${d.label} per box`} aria-label={`${d.label} per box`}
+                                      className="flex-1 min-w-0 h-12 px-4 rounded-xl border border-gray-200 bg-white text-base font-semibold text-gray-900 placeholder:font-normal placeholder:text-gray-400 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 outline-none transition-all shadow-sm" />
+                                    <div role="radiogroup" aria-label={`${d.label} unit`} className="flex shrink-0 h-12 p-1 rounded-xl bg-gray-100">
+                                      {d.units.map(([v, lbl]) => (
+                                        <button key={v} type="button" role="radio" aria-checked={formData[d.unit] === v}
+                                          onClick={() => setFormData((prev) => ({ ...prev, [d.unit]: v }))}
+                                          className={`min-w-[3rem] px-3 rounded-lg text-sm font-semibold transition-colors ${formData[d.unit] === v ? 'bg-white text-emerald-700 shadow-sm' : 'text-gray-500 hover:text-gray-800'}`}>
+                                          {lbl}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                  <div className="mt-2 flex flex-wrap gap-1.5">
+                                    {(d.chips[formData[d.unit]] || []).map((q) => (
+                                      <button key={q} type="button" onClick={() => setFormData((prev) => ({ ...prev, [d.qty]: String(q) }))}
+                                        className={`px-2.5 h-7 rounded-full text-xs font-medium border transition-colors ${Number(formData[d.qty]) === q ? 'bg-gray-900 border-gray-900 text-white' : 'bg-white border-gray-200 text-gray-600 hover:border-gray-400'}`}>
+                                        {q} {unitWord}
+                                      </button>
+                                    ))}
+                                    {on && (
+                                      <button type="button" onClick={() => setFormData((prev) => ({ ...prev, [d.qty]: '' }))}
+                                        className="px-2.5 h-7 rounded-full text-xs font-medium text-gray-400 hover:text-red-600">
+                                        Clear
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          {box.dims.length > 0 && (
+                            <div className="mt-2 flex flex-wrap gap-1.5">
+                              {box.packWeight > 0 && box.packVolume > 0 && (
+                                <span className="px-2.5 py-1 rounded-full bg-gray-100 text-xs font-medium text-gray-700">1 ltr = {r3n(l.gpl)} g</span>
+                              )}
+                              {box.packCount > 0 && (box.packWeight > 0 || box.packVolume > 0) && (
+                                <span className="px-2.5 py-1 rounded-full bg-gray-100 text-xs font-medium text-gray-700">
+                                  1 {cWord} = {r3n(formData.cUnit === 'scoop' ? l.scoopGrams : l.pieceGrams)} g{box.packVolume > 0 ? ` = ${r3n(box.packVolume / box.packCount)} ml` : ''}
+                                </span>
+                              )}
+                              {box.dims.length < 3 && (
+                                <span className="px-2.5 py-1 rounded-full bg-amber-50 border border-amber-200 text-xs font-medium text-amber-800">
+                                  Missing {BOX_DIMS.filter((d) => !box.dims.includes(d)).map((d) => d.label.toLowerCase()).join(' & ')} — shop defaults used
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-semibold mb-2 text-gray-700">Price per box (₹)</label>
+                            <input type="number" name="price" value={formData.price} onChange={handleInputChange} required min="0" step="0.01"
+                              className="w-full h-12 px-4 rounded-xl border border-gray-200 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 outline-none transition-all shadow-sm" />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-semibold mb-2 text-gray-700">{currentItem ? 'Stock' : 'Initial Stock'} (boxes)</label>
+                            <input type="number" name="stock" value={formData.stock} onChange={handleInputChange} required min="0"
+                              step={box.unit === 'pcs' && box.priceQty === 1 ? '1' : '0.001'}
+                              className="w-full h-12 px-4 rounded-xl border border-gray-200 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 outline-none transition-all shadow-sm" />
+                            {Number(formData.stock) > 0 && box.dims.length > 0 && (
+                              <p className="mt-1 text-xs text-gray-500">
+                                = {[
+                                  box.packWeight > 0 && formatQty(r3n((Number(formData.stock) * box.packWeight) / 1000), 'kg'),
+                                  box.packVolume > 0 && formatQty(r3n((Number(formData.stock) * box.packVolume) / 1000), 'ltr'),
+                                  box.packCount > 0 && `${formatQty(r3n(Number(formData.stock) * box.packCount))} ${formData.cUnit === 'scoop' ? 'scoops' : 'pcs'}`,
+                                ].filter(Boolean).join(' = ')}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        {draft.price > 0 && box.dims.length > 0 && (
+                          <div className="p-4 rounded-xl border border-gray-200 bg-gray-50">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-sm font-semibold text-gray-700">Calculated prices</span>
+                              <span className="text-[11px] text-gray-500">{formData.gstIncluded ? 'incl. GST' : '+5% GST at billing'}</span>
+                            </div>
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                              <div className="min-w-0 px-3 py-2 rounded-lg border bg-white border-emerald-500">
+                                <div className="text-[11px] text-gray-500">Price per box</div>
+                                <div className="text-sm font-bold text-gray-900">{fmt(draft.price)}</div>
+                              </div>
+                              {tiles.map((t) => (
+                                <div key={t.label} className="min-w-0 px-3 py-2 rounded-lg border bg-white border-gray-200">
+                                  <div className="text-[11px] text-gray-500">Price per {t.label}</div>
+                                  <div className={`text-sm font-bold ${t.v === null ? 'text-gray-400' : 'text-gray-900'}`}>{t.v === null ? '—' : fmt(t.v)}</div>
+                                  {t.v === null && <div className="text-[10px] text-gray-400 leading-tight">Add box weight or volume</div>}
+                                </div>
+                              ))}
+                            </div>
+                            <p className="mt-2 text-[11px] text-gray-500">Retail (any unit), Events (₹/ltr) and Stalls (₹/{cWord}) all bill from these same rates.</p>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
 
                   <label className={`flex items-start gap-3 p-4 rounded-xl border cursor-pointer transition-colors ${formData.gstIncluded ? 'border-emerald-500 bg-emerald-50' : 'border-gray-200 bg-white hover:border-gray-300'}`}>
                     <input
@@ -741,13 +930,8 @@ export default function Stock() {
                       {Number(formData.price) > 0 && (
                         <span className="block text-xs font-semibold text-emerald-700 mt-1.5">
                           {formData.gstIncluded
-                            ? `Customer pays ₹${Number(formData.price).toLocaleString('en-IN')} per ${formatQty(Number(formData.priceQty) > 0 ? formData.priceQty : 1, formData.unit)} (includes ₹${((Number(formData.price) * 5) / 105).toFixed(2)} GST)`
-                            : `Customer pays ₹${(Number(formData.price) * 1.05).toFixed(2)} per ${formatQty(Number(formData.priceQty) > 0 ? formData.priceQty : 1, formData.unit)} (₹${Number(formData.price).toLocaleString('en-IN')} + ₹${(Number(formData.price) * 0.05).toFixed(2)} GST)`}
-                        </span>
-                      )}
-                      {Number(formData.price) > 0 && Number(formData.priceQty) > 0 && Number(formData.priceQty) !== 1 && (
-                        <span className="block text-xs text-gray-500 mt-1">
-                          Billing charges ₹{Number((Number(formData.price) / Number(formData.priceQty)).toFixed(4))} per {formData.unit}, so any quantity can be sold.
+                            ? `Customer pays ₹${Number(formData.price).toLocaleString('en-IN')} per box (includes ₹${((Number(formData.price) * 5) / 105).toFixed(2)} GST)`
+                            : `Customer pays ₹${(Number(formData.price) * 1.05).toFixed(2)} per box (₹${Number(formData.price).toLocaleString('en-IN')} + ₹${(Number(formData.price) * 0.05).toFixed(2)} GST)`}
                         </span>
                       )}
                     </span>

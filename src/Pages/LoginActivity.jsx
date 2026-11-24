@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { LogIn, Users, Clock, Monitor, Globe, ChevronLeft, ChevronRight, Loader2, SearchX, Shield, User } from 'lucide-react';
+import { LogIn, Users, Clock, Monitor, Globe, ChevronLeft, ChevronRight, Loader2, SearchX, Shield, User, FileSpreadsheet } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { apiFetch } from '../utils/api';
+import { exportXlsx, stamp } from '../utils/xlsx';
 
 const LIMIT = 20;
 const RANGES = [
@@ -68,6 +69,7 @@ export default function LoginActivity() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [fetching, setFetching] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const reqId = useRef(0);
 
   const load = useCallback((p = 1) => {
@@ -110,6 +112,42 @@ export default function LoginActivity() {
   }, [logs]);
 
   const lastLogin = users.find((u) => u.lastLogin);
+
+  // Export every login matching the current account / date filters (the API pages at most 100 at a time)
+  const handleExport = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const rows = [];
+      for (let p = 1, pages = 1; p <= pages && p <= 500; p++) {
+        const qs = new URLSearchParams({ page: p, limit: 100 });
+        if (userFilter !== 'all') qs.set('user', userFilter);
+        const from = rangeStart(range);
+        if (from) qs.set('from', from);
+        const d = await apiFetch(`/login-activity?${qs}`);
+        rows.push(...(d.data || []));
+        pages = d.pagination?.totalPages || 1;
+      }
+      if (!rows.length) { toast.error('No logins to export'); return; }
+      await exportXlsx({
+        fileName: `Login_Activity_${stamp()}`,
+        sheetName: 'Login Activity',
+        columns: [
+          { header: 'Login At', value: (l) => (l.loginAt ? new Date(l.loginAt) : ''), numFmt: 'dd-mmm-yyyy hh:mm:ss', width: 20 },
+          { header: 'Name', key: 'name', width: 22 },
+          { header: 'Email', key: 'email', width: 26 },
+          { header: 'Role', key: 'role' },
+          { header: 'Device', value: (l) => l.device || 'Unknown device', width: 30 },
+          { header: 'IP Address', key: 'ip', width: 18 },
+        ],
+        rows,
+      });
+    } catch (err) {
+      toast.error(err.message || 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
     <div className="animate-fade-in-up">
@@ -166,6 +204,10 @@ export default function LoginActivity() {
               <option value="all">All accounts</option>
               {users.map((u) => <option key={u._id} value={u._id}>{u.name}</option>)}
             </select>
+            <button type="button" onClick={handleExport} disabled={exporting || loading || total === 0}
+              className="h-11 px-4 inline-flex items-center gap-2 text-sm font-semibold bg-white text-gray-600 border border-gray-200 hover:bg-emerald-100 disabled:opacity-50">
+              {exporting ? <Loader2 size={16} className="animate-spin" /> : <FileSpreadsheet size={16} />} Export
+            </button>
           </div>
         </div>
 

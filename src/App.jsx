@@ -17,6 +17,7 @@ const Stock = lazy(() => import("./Pages/Stock"));
 const BillingList = lazy(() => import("./Pages/BillingList"));
 const Reports = lazy(() => import("./Pages/Reports"));
 const Customers = lazy(() => import("./Pages/Customers"));
+const Records = lazy(() => import("./Pages/Records"));
 const Salespersons = lazy(() => import("./Pages/SalesPerson"));
 const BranchDetail = lazy(() => import("./Pages/BranchDetail"));
 const LoginActivity = lazy(() => import("./Pages/LoginActivity"));
@@ -79,7 +80,7 @@ function Layout() {
     <div className="flex h-screen overflow-hidden bg-canvas">
       <SideBar collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} />
 
-      <div className="flex-1 flex flex-col min-w-0 h-screen">
+      <div className="flex-1 flex flex-col min-w-0 h-screen supports-[height:100dvh]:h-dvh">
         <TopBar collapsed={sidebarCollapsed} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} />
 
         <main className={`flex-1 overflow-y-auto overflow-x-hidden text-gray-900 pt-20 sm:pt-24 md:pt-28 pb-12 md:pb-16 transition-all duration-300 pr-4 sm:pr-6 lg:pr-8 pl-4 sm:pl-6 ${sidebarCollapsed ? 'md:pl-28' : 'md:pl-80'}`}>
@@ -101,6 +102,8 @@ function Layout() {
             <Route path="/order-leads" element={user?.role === 'admin' ? <OrderLeads /> : <Navigate to="/dashboard" replace />} />
             <Route path="/dealership-leads" element={user?.role === 'admin' ? <DealershipLeads /> : <Navigate to="/dashboard" replace />} />
             <Route path="/testimonials-manager" element={user?.role === 'admin' ? <TestimonialManager /> : <Navigate to="/dashboard" replace />} />
+            <Route path="/records" element={user?.role === 'admin' ? <Records /> : <Navigate to="/dashboard" replace />} />
+            <Route path="/records/:id" element={user?.role === 'admin' ? <Records /> : <Navigate to="/dashboard" replace />} />
             <Route path="/campaigns" element={user?.role === 'admin' ? <Campaigns /> : <Navigate to="/dashboard" replace />} />
             <Route path="/campaigns/coupons" element={user?.role === 'admin' ? <Coupons /> : <Navigate to="/dashboard" replace />} />
             <Route path="/settings" element={<Settings />} />

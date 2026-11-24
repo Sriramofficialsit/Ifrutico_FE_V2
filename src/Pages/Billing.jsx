@@ -1,20 +1,39 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
-import { Plus, Minus, Trash2, Send, Search, Printer, X, Banknote, Smartphone, IceCreamCone, ShoppingBag, ChevronRight, ChevronLeft, Calendar, UserRound, Check, Tag, TicketPercent, Loader2 } from 'lucide-react';
+import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { Plus, Minus, Trash2, Send, Search, Printer, X, Banknote, Smartphone, IceCreamCone, ShoppingBag, ChevronRight, ChevronLeft, ChevronUp, Calendar, UserRound, Check, Tag, TicketPercent, Loader2 } from 'lucide-react';
 import { apiFetch, assetUrl } from '../utils/api';
 import { useAuth } from '../Context/AuthContext';
 import toast from 'react-hot-toast';
 import { buildBillMessage } from '../utils/whatsappBill';
-import { unitOf, unitStep, unitInitial, isLowStock, formatQty, formatStock, unitPrice, perLabel } from '../utils/units';
+import { unitOf, unitStep, unitInitial, isLowStock, formatQty, formatStock, unitPrice, perLabel, priceQtyOf } from '../utils/units';
 import { billTotals, discountLabel, lineDiscountLabel } from '../utils/gst';
 import { couponDiscount, offerText } from '../utils/coupon';
 import { createPortal } from 'react-dom';
 import { printReceipt } from '../utils/receipt';
 import { NavLink, Link } from 'react-router-dom';
 import {
-  BILL_MODES, BILL_MODE_LIST, DEFAULT_BILLING_CONFIG, isMeasurable, lineQuantity, lineCountLabel,
-  litresToUnits, stockInLitres, stockInScoops, pricePerLitre, pricePerScoop, fmtLitres,
+  BILL_MODES, BILL_MODE_LIST, DEFAULT_BILLING_CONFIG, canSellIn, stallUnits, stallUnitOf, stallCountField, lineQuantity, lineCountLabel,
+  retailUnits, retailStartUnit, sellUnitOf, stockIn, pricePer, convert, fmtLitres, hasOwnScoop, ownScoopGrams,
 } from '../utils/billModes';
 
+const UNIT_WORD = { pcs: 'pcs', scoop: 'scoops', g: 'g', kg: 'kg', ml: 'ml', ltr: 'ltr' };
+const PER_WORD = { pcs: 'pc', scoop: 'scoop', g: 'g', kg: 'kg', ml: 'ml', ltr: 'ltr' };
+
+// Events: litre sizes typed in by hand are remembered on this device and offered next to the configured sizes
+const CUSTOM_BOX_KEY = 'ifrutico.customBoxSizes';
+const MIN_LITRES = 0.1;
+const readCustomBoxes = () => {
+  try {
+    const v = JSON.parse(localStorage.getItem(CUSTOM_BOX_KEY) || '[]');
+    return Array.isArray(v) ? v.map(Number).filter((n) => n >= MIN_LITRES && n <= 50).slice(0, 6) : [];
+  } catch { return []; }
+};
+const saveCustomBoxes = (list) => {
+  try { localStorage.setItem(CUSTOM_BOX_KEY, JSON.stringify(list)); } catch { /* storage unavailable: suggestions just aren't remembered */ }
+};
+
+// Keep decimals tidy (0.1 + 0.2 -> 0.3) for quantities in kg/ltr and for money
+const round3 = (n) => Number(Number(n).toFixed(3));
+const money = (n) => Number(Number(n).toFixed(2));
 const inr = (n) => `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 const inputCls = 'w-full h-11 px-3.5 border border-gray-200 bg-white text-sm outline-none transition-all';
 const labelCls = 'block text-sm font-medium text-gray-700 mb-1.5';
@@ -66,6 +85,25 @@ function ProductThumb({ product, className }) {
   );
 }
 
+// Width the billing layout actually gets (sidebar open / collapsed / none), so the two-column layout
+// switches on real space rather than on the window width.
+const WIDE_LAYOUT_PX = 860;
+function useLayoutWidth() {
+  const ref = useRef(null);
+  const [width, setWidth] = useState(() => (typeof window === 'undefined' ? 1280 : window.innerWidth - (window.innerWidth >= 768 ? 320 : 32)));
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    const ro = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width));
+    ro.observe(el); // the first callback fires right away with the real width
+    return () => ro.disconnect();
+  }, []);
+  return [ref, width];
+}
+// Bigger hit areas on touch screens (phones, tablets, touch POS terminals)
+const TAP_SQ = '[@media(pointer:coarse)]:w-10 [@media(pointer:coarse)]:h-10';
+const TAP_H = '[@media(pointer:coarse)]:h-9';
+
 // 1 Products -> 2 Customer -> 3 Done
 function Steps({ current }) {
   const steps = ['Products', 'Customer', 'Done'];
@@ -80,8 +118,8 @@ function Steps({ current }) {
             <span className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold transition-colors ${done ? 'bg-emerald-700 text-white' : active ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-400'}`}>
               {done ? <Check size={13} strokeWidth={3} /> : n}
             </span>
-            <span className={active ? 'text-gray-900' : 'text-gray-400'}>{s}</span>
-            {n < steps.length && <span className={`w-6 h-px ${done ? 'bg-emerald-700' : 'bg-gray-200'}`} />}
+            <span className={active ? 'text-gray-900' : 'hidden min-[380px]:inline text-gray-400'}>{s}</span>
+            {n < steps.length && <span className={`w-4 min-[380px]:w-6 h-px ${done ? 'bg-emerald-700' : 'bg-gray-200'}`} />}
           </li>
         );
       })}
@@ -92,11 +130,13 @@ function Steps({ current }) {
 // Retail / Events & Functions / Stalls switcher, styled like the category chips
 function ModeTabs({ current }) {
   return (
-    <nav aria-label="Billing type" className="flex gap-1 p-1 bg-white border border-gray-200 rounded-full overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+    <nav aria-label="Billing type" className="grid grid-cols-3 sm:inline-flex gap-1 p-1 w-full sm:w-fit bg-white border border-gray-200 rounded-full">
       {BILL_MODE_LIST.map((m) => (
         <NavLink key={m.key} to={m.path} end
-          className={`shrink-0 inline-flex items-center gap-2 px-4 h-9 rounded-full text-sm font-medium transition-colors ${current === m.key ? 'bg-emerald-700 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
-          <m.icon size={16} /> {m.label}
+          className={`min-w-0 inline-flex items-center justify-center gap-1.5 sm:gap-2 px-2 sm:px-4 h-9 [@media(pointer:coarse)]:h-10 rounded-full text-sm font-medium transition-colors ${current === m.key ? 'bg-emerald-700 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
+          <m.icon size={16} className="shrink-0" />
+          <span className="truncate sm:hidden">{m.short || m.label}</span>
+          <span className="hidden sm:inline">{m.label}</span>
         </NavLink>
       ))}
     </nav>
@@ -108,19 +148,19 @@ function ScoopSize({ value, onChange, fallback, error }) {
   const n = Number(value) || fallback;
   const bump = (d) => onChange(String(Math.min(1000, Math.max(10, n + d))));
   return (
-    <div className="px-5 py-3 border-b border-gray-100 bg-emerald-50/60">
+    <div className="px-4 sm:px-5 py-3 border-b border-gray-100 bg-emerald-50/60">
       <div className="flex items-center justify-between gap-3">
         <label htmlFor="scoop-grams" className="text-sm font-medium text-gray-700 flex items-center gap-1.5"><IceCreamCone size={15} className="text-emerald-700" /> Scoop size</label>
         <div className="flex items-center border border-gray-200 bg-white rounded-full p-0.5">
-          <button type="button" onClick={() => bump(-5)} aria-label="Smaller scoop" className="w-8 h-8 hover:bg-gray-100 flex items-center justify-center text-gray-600"><Minus size={14} /></button>
+          <button type="button" onClick={() => bump(-5)} aria-label="Smaller scoop" className={`w-8 h-8 ${TAP_SQ} rounded-full hover:bg-gray-100 flex items-center justify-center text-gray-600`}><Minus size={14} /></button>
           <input id="scoop-grams" type="number" inputMode="numeric" min="10" max="1000" step="5" value={value} placeholder={String(fallback)}
             onChange={(e) => onChange(e.target.value)} aria-invalid={!!error}
-            className="w-14 h-8 text-center font-semibold text-sm text-gray-900 bg-transparent !border-0 !shadow-none outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" />
+            className="w-12 sm:w-14 h-8 text-center font-semibold text-sm text-gray-900 bg-transparent !border-0 !shadow-none outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" />
           <span className="text-xs text-gray-400 pr-1">g</span>
-          <button type="button" onClick={() => bump(5)} aria-label="Bigger scoop" className="w-8 h-8 hover:bg-gray-100 flex items-center justify-center text-gray-600"><Plus size={14} /></button>
+          <button type="button" onClick={() => bump(5)} aria-label="Bigger scoop" className={`w-8 h-8 ${TAP_SQ} rounded-full hover:bg-gray-100 flex items-center justify-center text-gray-600`}><Plus size={14} /></button>
         </div>
       </div>
-      {error ? <p className="mt-1 text-xs text-red-600">{error}</p> : <p className="mt-1 text-xs text-gray-500">Scoop prices and stock use this size. Default {fallback} g.</p>}
+      {error ? <p className="mt-1 text-xs text-red-600">{error}</p> : <p className="mt-1 text-xs text-gray-500">For products without a scoop count in their box. Default {fallback} g.</p>}
     </div>
   );
 }
@@ -129,14 +169,21 @@ export default function Billing({ mode = 'retail' }) {
   const { user } = useAuth();
   const modeInfo = BILL_MODES[mode] || BILL_MODES.retail;
   const isRetail = mode === 'retail';
-  const countField = mode === 'event' ? 'boxes' : 'scoops'; // what +/- changes on Events / Stalls lines
-  const countWord = mode === 'event' ? 'box' : 'scoop';
+  // What +/- changes on an Events / Stalls line: boxes (events), pieces (pcs items at stalls) or scoops
+  // (config is declared just below; these run only after render starts)
+  const countFieldOf = (b) => (mode === 'event' ? 'boxes' : mode === 'stall' ? stallCountField(b, config) : 'qty');
+  const countWordOf = (line) => (mode === 'event' ? 'box' : stallUnitOf(line, config) === 'pcs' ? 'piece' : 'scoop');
+  const [customBoxes, setCustomBoxes] = useState(readCustomBoxes);
+  const [customBoxInput, setCustomBoxInput] = useState({}); // productId -> litres being typed
   const [config, setConfig] = useState(DEFAULT_BILLING_CONFIG);
   const [scoopInput, setScoopInput] = useState(''); // '' = use the configured scoop size
   const canAutofill = user?.role === 'admin'; // saved-customer suggestions are admin-only
   const [products, setProducts] = useState([]);
   const [loadingProducts, setLoadingProducts] = useState(true);
   const [billItems, setBillItems] = useState([]);
+  const [layoutRef, layoutWidth] = useLayoutWidth();
+  const wide = layoutWidth >= WIDE_LAYOUT_PX;   // products + order side by side
+  const [orderOpen, setOrderOpen] = useState(false); // narrow layouts: order shown as a sheet / drawer
   const [customerName, setCustomerName] = useState('');
   const [customerMobile, setCustomerMobile] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
@@ -190,6 +237,7 @@ export default function Billing({ mode = 'retail' }) {
   const [coupon, setCoupon] = useState(null);
   const [couponInput, setCouponInput] = useState('');
   const [couponOpen, setCouponOpen] = useState(false);
+  const [billDiscOpen, setBillDiscOpen] = useState(false); // overall discount row folded until asked for
   const [couponBusy, setCouponBusy] = useState(false);
   // Checkout popup: null (closed) | 'details' (step 2) | 'generating' (animation) | 'done' (step 3)
   const [checkout, setCheckout] = useState(null);
@@ -232,11 +280,10 @@ export default function Billing({ mode = 'retail' }) {
       .then(data => setSettings(data.data))
       .catch(() => {});
 
-    if (!isRetail) {
-      apiFetch('/billing-config')
-        .then((d) => d.data && setConfig({ ...DEFAULT_BILLING_CONFIG, ...d.data }))
-        .catch(() => toast.error('Could not load billing units; using defaults.'));
-    }
+    // All three screens convert between units (Retail can sell a kg product by the piece, etc.)
+    apiFetch('/billing-config')
+      .then((d) => d.data && setConfig({ ...DEFAULT_BILLING_CONFIG, ...d.data }))
+      .catch(() => toast.error('Could not load billing units; using defaults.'));
   }, [isRetail]);
 
   // Step 2 opens with the name field focused; Escape closes it (but never mid-generation)
@@ -248,40 +295,74 @@ export default function Billing({ mode = 'retail' }) {
     return () => document.removeEventListener('keydown', onKey);
   }, [checkout]);
 
-  const categories = useMemo(() => [...new Set((isRetail ? products : products.filter(isMeasurable)).map((p) => p.category).filter(Boolean))].sort(), [products, isRetail]);
+  const categories = [...new Set(products.filter((p) => canSellIn(mode, p, config)).map((p) => p.category).filter(Boolean))].sort();
 
   const term = searchTerm.trim().toLowerCase();
-  // Events and Stalls only list products stocked by weight or volume
-  const sellable = useMemo(() => (isRetail ? products : products.filter(isMeasurable)), [products, isRetail]);
-  const gpl = config.gramsPerLitre;
+  // Events list products that convert to litres (scoop/weight/volume, or pcs with a weight per piece);
+  // Stalls list anything sold by scoop or piece; Retail lists everything
+  const sellable = products.filter((p) => canSellIn(mode, p, config));
   const scoopError = mode !== 'stall' || scoopInput === '' ? null
     : !(Number(scoopInput) >= 10 && Number(scoopInput) <= 1000) ? 'Scoop size must be 10–1000 g.' : null;
   const scoopGrams = mode === 'stall' && scoopInput !== '' && !scoopError ? Number(scoopInput) : config.scoopGrams;
-  const minBox = Math.min(...config.boxSizes);
+  // Suggested box sizes: the central ones plus sizes typed on this device
+  const boxSuggestions = [...new Set([...config.boxSizes, ...customBoxes])].sort((a, b) => a - b);
+  // Box a new Events line starts with: 1 L if it fits, else the biggest suggested size that fits, else whatever is left
+  const defaultBox = (p) => {
+    const left = stockIn('ltr', p, config);
+    if (left >= 1 && boxSuggestions.includes(1)) return 1;
+    const fits = boxSuggestions.filter((sz) => sz <= left);
+    return fits.length ? fits[fits.length - 1] : Math.max(MIN_LITRES, Math.floor(left * 100) / 100);
+  };
 
-  // Events / Stalls lines store only box size + count or scoop count; the stock quantity and price follow from them
+  // Every line stores what was sold (retail qty + unit, box size + boxes, scoops or pieces);
+  // the stock quantity and price always follow from the shared conversion engine (same maths as the server)
   const withQty = (b, sg = scoopGrams) => {
-    if (isRetail) return b;
     const quantity = lineQuantity(mode, b, config, sg);
-    return { ...b, quantity, subtotal: Number((quantity * unitPrice(b.item)).toFixed(2)) };
+    return { ...b, quantity, subtotal: money(quantity * unitPrice(b.item)) };
   };
-  const lines = isRetail ? billItems : billItems.map((b) => withQty(b));
+  const lines = billItems.map((b) => withQty(b));
+  // Most boxes / scoops / pieces of this line the stock allows (binary search: pcs stock rounds up to whole pieces)
   const maxCount = (b) => {
-    const one = lineQuantity(mode, { ...b, boxes: 1, scoops: 1 }, config, scoopGrams);
-    return one > 0 ? Math.floor(b.item.stock / one + 1e-9) : 0;
+    const field = countFieldOf(b);
+    const fits = (n) => lineQuantity(mode, { ...b, [field]: n }, config, scoopGrams) <= Number(b.item.stock) + 1e-6;
+    if (!fits(1)) return 0;
+    let lo = 1, hi = 100000;
+    while (lo < hi) { const mid = Math.ceil((lo + hi) / 2); if (fits(mid)) lo = mid; else hi = mid - 1; }
+    return lo;
   };
+  const newStallLine = (p) => ({ item: p, stallUnit: stallUnits(p, config)[0] });
   const isOut = (p) =>
-    mode === 'event' ? p.stock < litresToUnits(minBox, p, gpl)
-      : mode === 'stall' ? stockInScoops(p, gpl, scoopGrams) < 1
+    mode === 'event' ? stockIn('ltr', p, config) < MIN_LITRES
+      : mode === 'stall' ? maxCount(newStallLine(p)) < 1
       : p.stock <= 0;
-  const stockLeft = (p) =>
-    mode === 'event' ? `${formatQty(stockInLitres(p, gpl))} L`
-      : mode === 'stall' ? `${stockInScoops(p, gpl, scoopGrams)} scoops`
-      : formatStock(p.stock, p);
-  const priceLabel = (p) =>
-    mode === 'event' ? <>{inr(pricePerLitre(p, gpl))}<span className="text-xs font-normal text-gray-500">/L</span></>
-      : mode === 'stall' ? <>{inr(pricePerScoop(p, gpl, scoopGrams))}<span className="text-xs font-normal text-gray-500">/scoop</span></>
-      : <>₹{p.price}<span className="text-xs font-normal text-gray-500">{perLabel(p)}</span></>;
+  const stockLeft = (p, line) => {
+    if (mode === 'event') return `${formatQty(Math.floor(stockIn('ltr', p, config) * 10) / 10)} L`;
+    if (mode === 'stall') {
+      const l = line || newStallLine(p);
+      return `${maxCount(l)} ${stallUnitOf(l, config) === 'pcs' ? 'pcs' : 'scoops'}`;
+    }
+    return formatStock(p.stock, p);
+  };
+  // ₹ for one scoop of this bill's size / one piece / one litre
+  // Products whose box lists its scoop count use their own scoop; others use this bill's scoop size
+  const lineScoopGrams = (p) => (hasOwnScoop(p, config) ? Math.round((ownScoopGrams(p, config) || 0) * 10) / 10 : scoopGrams);
+  const stallPrice = (p, u) =>
+    u === 'pcs' ? pricePer('pcs', p, config)
+      : hasOwnScoop(p, config) ? pricePer('scoop', p, config)
+      : (pricePer('g', p, config) || 0) * scoopGrams;
+  const priceLabel = (p) => {
+    if (mode === 'event') return <>{inr(pricePer('ltr', p, config))}<span className="text-xs font-normal text-gray-500">/L</span></>;
+    if (mode === 'stall') {
+      const u = stallUnits(p, config)[0];
+      return <>{inr(stallPrice(p, u))}<span className="text-xs font-normal text-gray-500">/{PER_WORD[u]}</span></>;
+    }
+    const u = retailStartUnit(p, config);
+    if (u !== unitOf(p) || priceQtyOf(p) !== 1) {
+      const rate = pricePer(u, p, config);
+      if (rate !== null) return <>{inr(rate)}<span className="text-xs font-normal text-gray-500">/{PER_WORD[u]}</span><span className="block text-[11px] font-medium text-gray-400">₹{p.price}{perLabel(p) || '/pc'}</span></>;
+    }
+    return <>₹{p.price}<span className="text-xs font-normal text-gray-500">{perLabel(p)}</span></>;
+  };
 
   const filteredProducts = sellable.filter((p) =>
     (category === 'all' || p.category === category) &&
@@ -292,12 +373,9 @@ export default function Billing({ mode = 'retail' }) {
 
   const addItem = (product) => {
     if (!isRetail) {
-      if (isOut(product)) { toast.error(`Not enough ${product.itemName} left for one ${countWord}.`); return; }
+      const line = mode === 'event' ? { item: product, boxSize: defaultBox(product), boxes: 1 } : { ...newStallLine(product), [stallCountField(newStallLine(product), config)]: 1 };
+      if (isOut(product)) { toast.error(`Not enough ${product.itemName} left for one ${countWordOf(line)}.`); return; }
       if (billItems.some((b) => b.item._id === product._id)) { changeQuantity(product._id, 1); return; }
-      const line = mode === 'event'
-        ? { item: product, boxSize: config.boxSizes.includes(1) ? 1 : minBox, boxes: 1 }
-        : { item: product, scoops: 1 };
-      if (withQty(line).quantity > product.stock) line.boxSize = minBox;
       setBillItems([...billItems, line]);
       return;
     }
@@ -305,19 +383,16 @@ export default function Billing({ mode = 'retail' }) {
       toast.error(`Sorry, ${product.itemName} is out of stock!`);
       return;
     }
-
-    const existingItem = billItems.find((b) => b.item._id === product._id);
-    if (existingItem && existingItem.quantity >= product.stock) {
-      toast.error(`Only ${formatStock(product.stock, product)} available!`);
+    if (billItems.some((b) => b.item._id === product._id)) {
+      changeQuantity(product._id, 1);
       return;
     }
-
-    if (existingItem) {
-      changeQuantity(product._id, 1);
-    } else {
-      const qty = Math.min(unitInitial(product), product.stock);
-      setBillItems([...billItems, { item: product, quantity: qty, subtotal: money(qty * unitPrice(product)) }]);
-    }
+    // Start in the admin's default retail measure (Settings → Billing Units) when this product converts to it
+    const sellUnit = retailStartUnit(product, config);
+    const left = stockIn(sellUnit, product, config);
+    const qty = Math.min(unitInitial({ unit: sellUnit }), sellUnit === 'pcs' ? Math.floor(left + 1e-6) : Math.floor(left * 1000 + 1e-6) / 1000);
+    if (!(qty > 0)) { toast.error(`Sorry, ${product.itemName} is out of stock!`); return; }
+    setBillItems([...billItems, { item: product, qty, sellUnit }]);
   };
 
   // Enter in the search box adds the first in-stock match (fast keyboard / barcode-scanner flow)
@@ -327,9 +402,6 @@ export default function Billing({ mode = 'retail' }) {
     if (first) { addItem(first); setSearchTerm(''); }
   };
 
-  // Keep decimals tidy (0.1 + 0.2 -> 0.3) for quantities in kg/ltr and for money
-  const round3 = (n) => Number(Number(n).toFixed(3));
-  const money = (n) => Number(Number(n).toFixed(2));
 
   // +/- buttons move by the unit's natural step (1 pcs, 0.5 kg/ltr, 100 g/ml), capped at available stock
   const changeQuantity = (id, direction) => {
@@ -338,6 +410,7 @@ export default function Billing({ mode = 'retail' }) {
         billItems
           .map((b) => {
             if (b.item._id !== id) return b;
+            const countField = countFieldOf(b);
             const count = Math.max(0, (Number(b[countField]) || 0) + direction);
             if (direction > 0 && count > maxCount(b)) {
               toast.error(`Only ${stockLeft(b.item)} of ${b.item.itemName} available!`);
@@ -345,7 +418,7 @@ export default function Billing({ mode = 'retail' }) {
             }
             return { ...b, [countField]: count };
           })
-          .filter((b) => Number(b[countField]) > 0)
+          .filter((b) => Number(b[countFieldOf(b)]) > 0)
       );
       return;
     }
@@ -353,10 +426,14 @@ export default function Billing({ mode = 'retail' }) {
       billItems
         .map((b) => {
           if (b.item._id !== id) return b;
-          const newQty = Math.min(b.item.stock, Math.max(0, round3((Number(b.quantity) || 0) + direction * unitStep(b.item))));
-          return { ...b, quantity: newQty, subtotal: money(newQty * unitPrice(b.item)) };
+          const next = { ...b, qty: Math.max(0, round3((Number(b.qty) || 0) + direction * unitStep({ unit: sellUnitOf(b) }))) };
+          if (direction > 0 && withQty(next).quantity > Number(b.item.stock) + 1e-6) {
+            toast.error(`Only ${formatStock(b.item.stock, b.item)} of ${b.item.itemName} available!`);
+            return b;
+          }
+          return next;
         })
-        .filter((b) => b.quantity > 0)
+        .filter((b) => Number(b.qty) > 0)
     );
   };
 
@@ -366,6 +443,7 @@ export default function Billing({ mode = 'retail' }) {
       setBillItems(
         billItems.map((b) => {
           if (b.item._id !== id) return b;
+          const countField = countFieldOf(b);
           if (raw === '') return { ...b, [countField]: '' };
           let n = Math.floor(parseFloat(raw));
           if (Number.isNaN(n) || n < 0) return b;
@@ -379,31 +457,74 @@ export default function Billing({ mode = 'retail' }) {
     setBillItems(
       billItems.map((b) => {
         if (b.item._id !== id) return b;
-        if (raw === '') return { ...b, quantity: '', subtotal: 0 };
+        if (raw === '') return { ...b, qty: '' };
         let q = parseFloat(raw);
         if (Number.isNaN(q) || q < 0) return b;
-        q = unitOf(b.item) === 'pcs' ? Math.floor(q) : round3(q);
-        if (q > b.item.stock) {
+        const u = sellUnitOf(b);
+        q = u === 'pcs' ? Math.floor(q) : round3(q);
+        if (withQty({ ...b, qty: q }).quantity > Number(b.item.stock) + 1e-6) {
           toast.error(`Only ${formatStock(b.item.stock, b.item)} available!`);
-          q = b.item.stock;
+          const most = stockIn(u, b.item, config);
+          q = u === 'pcs' ? Math.floor(most + 1e-6) : Math.floor(most * 1000 + 1e-6) / 1000;
         }
-        return { ...b, quantity: q, subtotal: money(q * unitPrice(b.item)) };
+        return { ...b, qty: q };
       })
     );
   };
 
-  // Events: switch a line to another box size, keeping the box count within stock
+  // Retail: sell this line in another unit (e.g. a kg product by the piece); the amount is converted, not reset
+  const setSellUnit = (id, u) => {
+    setBillItems(billItems.map((b) => {
+      if (b.item._id !== id) return b;
+      const conv = convert(Number(b.qty) || 0, sellUnitOf(b), u, b.item, config);
+      let qty = conv === null ? unitInitial({ unit: u }) : u === 'pcs' ? Math.max(1, Math.round(conv)) : round3(conv);
+      if (!(qty > 0)) qty = unitInitial({ unit: u });
+      return { ...b, sellUnit: u, qty };
+    }));
+  };
+  // Stalls: switch a line between scoops and pieces
+  const setStallUnit = (id, u) => {
+    setBillItems(billItems.map((b) => {
+      if (b.item._id !== id) return b;
+      const next = { ...b, stallUnit: u };
+      const field = stallCountField(next, config);
+      if (!(Number(next[field]) > 0)) next[field] = 1;
+      if (maxCount(next) < 1) { toast.error(`Not enough ${b.item.itemName} for one ${u === 'pcs' ? 'piece' : 'scoop'}.`); return b; }
+      return next;
+    }));
+  };
+
+  // Events: a hand-typed litre size for one line; remembered as a suggestion on this device
+  const applyCustomBox = (id) => {
+    const v = Math.round(Number(customBoxInput[id]) * 100) / 100;
+    if (!(v >= MIN_LITRES && v <= 50)) { toast.error('Box size must be 0.1–50 L.'); return; }
+    if (!setBoxSize(id, v)) return;
+    setCustomBoxInput((m) => ({ ...m, [id]: undefined }));
+    if (!boxSuggestions.includes(v)) {
+      const next = [v, ...customBoxes.filter((c) => c !== v)].slice(0, 6);
+      setCustomBoxes(next);
+      saveCustomBoxes(next);
+    }
+  };
+  const forgetCustomBoxes = () => {
+    setCustomBoxes([]);
+    saveCustomBoxes([]);
+  };
+
+  // Events: switch a line to another box size, keeping the box count within stock. Returns false if it doesn't fit.
   const setBoxSize = (id, size) => {
+    const b = billItems.find((x) => x.item._id === id);
+    if (b && maxCount({ ...b, boxSize: size }) < 1) { toast.error(`Not enough ${b.item.itemName} for a ${fmtLitres(size)} box.`); return false; }
     setBillItems(
       billItems.map((b) => {
         if (b.item._id !== id) return b;
         const next = { ...b, boxSize: size };
         const max = maxCount(next);
-        if (max < 1) { toast.error(`Not enough ${b.item.itemName} for a ${fmtLitres(size)} box.`); return b; }
         if (Number(next.boxes) > max) { toast(`Reduced to ${max} box${max === 1 ? '' : 'es'} (stock limit).`); next.boxes = max; }
         return next;
       })
     );
+    return true;
   };
 
   const removeItem = (id) => setBillItems(billItems.filter((b) => b.item._id !== id));
@@ -468,7 +589,8 @@ export default function Billing({ mode = 'retail' }) {
   const removeCoupon = () => { setCoupon(null); setCouponInput(''); };
   const hasInclusive = lines.some((b) => b.item.gstIncluded);
   const totalLitres = mode === 'event' ? lines.reduce((s, b) => s + (Number(b.boxSize) || 0) * (Number(b.boxes) || 0), 0) : 0;
-  const totalScoops = mode === 'stall' ? lines.reduce((s, b) => s + (Number(b.scoops) || 0), 0) : 0;
+  const totalScoops = mode === 'stall' ? lines.reduce((s, b) => s + (stallUnitOf(b, config) === 'pcs' ? 0 : Number(b.scoops) || 0), 0) : 0;
+  const totalPieces = mode === 'stall' ? lines.reduce((s, b) => s + (stallUnitOf(b, config) === 'pcs' ? Number(b.pieces) || 0 : 0), 0) : 0;
 
   const clearBill = () => {
     setBillItems([]);
@@ -479,6 +601,7 @@ export default function Billing({ mode = 'retail' }) {
     setPaymentMethod('Cash');
     setDiscountInput('');
     setDiscountType('amount');
+    setBillDiscOpen(false);
     setCoupon(null);
     setCouponInput('');
     setCouponOpen(false);
@@ -487,13 +610,14 @@ export default function Billing({ mode = 'retail' }) {
   // Step 1 -> 2
   const goToCustomer = () => {
     if (billItems.length === 0) { toast.error('Add at least one product.'); return; }
-    if (lines.some((b) => !(Number(b.quantity) > 0))) { toast.error(isRetail ? 'Enter a quantity greater than 0 for every product.' : `Enter at least 1 ${countWord} for every product.`); return; }
+    if (lines.some((b) => !(Number(b.quantity) > 0))) { toast.error(isRetail ? 'Enter a quantity greater than 0 for every product.' : (mode === 'event' ? 'Enter at least 1 box for every product.' : 'Enter at least 1 scoop or piece for every product.')); return; }
     if (scoopError) { toast.error(scoopError); return; }
-    const over = lines.find((b) => b.quantity > b.item.stock);
-    if (over) { toast.error(`Only ${stockLeft(over.item)} of ${over.item.itemName} available.`); return; }
+    const over = lines.find((b) => b.quantity > Number(b.item.stock) + 1e-6);
+    if (over) { toast.error(`Only ${stockLeft(over.item, over)} of ${over.item.itemName} available.`); return; }
     if (firstLineDiscError >= 0) { toast.error(`${lines[firstLineDiscError].item.itemName} discount: ${lineDiscountErrorOf[firstLineDiscError]}`); return; }
     if (discountError) { toast.error(discountError); return; }
     if (couponShort) { toast.error(`Add ${inr(couponShort)} more to use ${coupon.code}, or remove the coupon.`); return; }
+    setOrderOpen(false);
     setCheckout('details');
   };
 
@@ -515,8 +639,8 @@ export default function Billing({ mode = 'retail' }) {
         billType: mode,
         products: pricedLines.map((b) => ({
           ...(mode === 'event' ? { productId: b.item._id, boxSize: Number(b.boxSize), boxes: Number(b.boxes) }
-            : mode === 'stall' ? { productId: b.item._id, scoops: Number(b.scoops) }
-            : { productId: b.item._id, quantity: Number(b.quantity) }),
+            : mode === 'stall' ? (stallUnitOf(b, config) === 'pcs' ? { productId: b.item._id, pieces: Number(b.pieces) } : { productId: b.item._id, scoops: Number(b.scoops) })
+            : { productId: b.item._id, quantity: Number(b.qty), ...(sellUnitOf(b) !== unitOf(b.item) ? { sellUnit: sellUnitOf(b) } : {}) }),
           ...(b.discount ? { discountType: b.discount.type, discountValue: b.discount.value } : {}),
         })),
         ...(mode === 'stall' ? { scoopGrams } : {}),
@@ -547,9 +671,11 @@ export default function Billing({ mode = 'retail' }) {
         date: new Date().toLocaleDateString(),
         createdAt: res.data?.createdAt || new Date().toISOString(),
         billType: mode,
-        items: pricedLines.map((b, i) => ({ name: b.item.itemName, qty: isRetail ? formatQty(b.quantity, unitOf(b.item)) : lineCountLabel(mode, b) + (mode === 'stall' ? ` (${scoopGrams} g)` : ''),
+        items: pricedLines.map((b, i) => ({ name: b.item.itemName, qty: lineCountLabel(mode, b, config) + (mode === 'stall' && stallUnitOf(b, config) !== 'pcs' && lineScoopGrams(b.item) > 0 ? ` (${lineScoopGrams(b.item)} g)` : ''),
           ...(mode === 'event' ? { boxes: Number(b.boxes), boxSize: Number(b.boxSize) } : {}),
-          ...(mode === 'stall' ? { scoops: Number(b.scoops), scoopGrams } : {}),
+          ...(mode === 'stall' && stallUnitOf(b, config) !== 'pcs' ? { scoops: Number(b.scoops), scoopGrams: lineScoopGrams(b.item) } : {}),
+          ...(mode === 'stall' && stallUnitOf(b, config) === 'pcs' ? { soldQty: Number(b.pieces), soldUnit: 'pcs' } : {}),
+          ...(isRetail && sellUnitOf(b) !== unitOf(b.item) ? { soldQty: Number(b.qty), soldUnit: sellUnitOf(b) } : {}),
           price: b.item.price, per: perLabel(b.item), quantity: b.quantity, unit: unitOf(b.item), priceQty: b.item.priceQty, total: b.subtotal, gstIncluded: !!b.item.gstIncluded,
           ...(() => {
             const saved = res.data?.products?.[i];
@@ -596,49 +722,62 @@ export default function Billing({ mode = 'retail' }) {
   };
 
   const itemCount = lines.length;
+  useEffect(() => {
+    if (wide || !orderOpen) return undefined;
+    const onKey = (e) => e.key === 'Escape' && setOrderOpen(false);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [wide, orderOpen]);
   const today = new Date().toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
 
   return (
     <div className="animate-fade-in-up">
-      <div className="mx-auto max-w-screen-2xl space-y-6">
+      <div ref={layoutRef} className="mx-auto max-w-screen-2xl space-y-4 sm:space-y-6">
         {/* Header */}
         <ModeTabs current={mode} />
         <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
           <div className="space-y-2">
-            <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-gray-900 flex items-center gap-3">
-              <span className="w-11 h-11 rounded-full bg-emerald-700 text-white flex items-center justify-center shrink-0"><modeInfo.icon size={22} /></span>
+            <h1 className="text-2xl sm:text-3xl xl:text-4xl font-bold tracking-tight text-gray-900 flex items-center gap-3">
+              <span className="w-9 h-9 sm:w-11 sm:h-11 rounded-full bg-emerald-700 text-white flex items-center justify-center shrink-0"><modeInfo.icon size={20} /></span>
               {modeInfo.title}
             </h1>
             <p className="text-sm text-gray-500">
               {modeInfo.blurb}
-              {mode === 'event' && <> · Box sizes {config.boxSizes.map(fmtLitres).join(', ')}</>}
-              {mode === 'stall' && <> · {scoopGrams} g per scoop</>}
+              {mode === 'event' && <> · Suggested {config.boxSizes.map(fmtLitres).join(', ')} or any custom size</>}
+              {mode === 'stall' && <> · {scoopGrams} g per scoop · pcs items by the piece</>}
               {!isRetail && user?.role === 'admin' && <> · <Link to="/settings#billing-units" className="font-medium text-emerald-700 hover:underline">Change units</Link></>}
             </p>
             <Steps current={1} />
           </div>
-          <div className="flex flex-wrap gap-2 text-xs font-medium">
+          <div className="hidden lg:flex flex-wrap gap-2 text-xs font-medium whitespace-nowrap">
             <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white border border-gray-200 text-gray-600"><Calendar size={14} /> {today}</span>
             {user?.name && <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white border border-gray-200 text-gray-600"><UserRound size={14} /> {user.name}</span>}
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_400px] gap-6 items-start">
+        <div className={wide ? 'grid grid-cols-[minmax(0,1fr)_clamp(330px,34%,420px)] gap-5 2xl:gap-6 items-start' : 'grid grid-cols-1 gap-4'}>
           {/* Left – Product catalogue */}
           <section className="bg-white rounded-2xl border border-gray-100 shadow-sm min-w-0">
-            <div className="p-4 sm:p-5 space-y-3 border-b border-gray-100">
+            <div className="p-3 sm:p-5 space-y-3 border-b border-gray-100">
               <div className="relative">
                 <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={18} />
                 <input
                   ref={searchRef}
                   type="text"
-                  placeholder={loadingProducts ? 'Loading products...' : 'Search name or SKU (Enter adds first match)'}
+                  placeholder={loadingProducts ? 'Loading products...' : 'Search name or SKU'}
+                  title="Press Enter to add the first match"
+                  enterKeyHint="done"
                   value={searchTerm}
                   disabled={loadingProducts}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   onKeyDown={handleSearchKey}
-                  className="w-full h-12 pl-11 pr-10 border border-gray-200 bg-white outline-none text-gray-900 placeholder-gray-400"
+                  className="w-full h-12 pl-11 pr-10 [@media(hover:hover)]:pr-28 border border-gray-200 bg-white outline-none text-gray-900 placeholder-gray-400"
                 />
+                {searchTerm && filteredProducts.some((p) => !isOut(p)) && (
+                  <span className="hidden [@media(hover:hover)]:inline-flex absolute right-11 top-1/2 -translate-y-1/2 items-center gap-1 text-[11px] text-gray-400 pointer-events-none">
+                    <kbd className="px-1.5 py-0.5 rounded border border-gray-200 font-sans">Enter</kbd> adds
+                  </span>
+                )}
                 {searchTerm && (
                   <button type="button" onClick={() => { setSearchTerm(''); searchRef.current?.focus(); }} aria-label="Clear search"
                     className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100">
@@ -663,9 +802,9 @@ export default function Billing({ mode = 'retail' }) {
               )}
             </div>
 
-            <div className="p-4 sm:p-5">
+            <div className="p-3 sm:p-5">
               {loadingProducts ? (
-                <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
+                <div className="grid gap-2.5 sm:gap-3 grid-cols-[repeat(auto-fill,minmax(min(9.5rem,calc(50%_-_0.375rem)),1fr))]">
                   {Array.from({ length: 8 }).map((_, i) => (
                     <div key={i} className="rounded-xl border border-gray-100 overflow-hidden animate-pulse">
                       <div className="aspect-[4/3] bg-gray-100" />
@@ -679,12 +818,12 @@ export default function Billing({ mode = 'retail' }) {
                   <p className="mt-3 font-medium text-gray-700">No products found</p>
                   <p className="text-sm text-gray-500">
                     {!products.length ? 'Add products on the Stock page first.'
-                      : !sellable.length ? `${modeInfo.label} billing needs products stocked in g, kg, ml or ltr. Set the unit on the Stock page.`
+                      : !sellable.length ? `${modeInfo.label} billing needs products stocked in scoops, g, kg, ml or ltr. Set the unit on the Stock page.`
                       : 'Try another name, SKU or category.'}
                   </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
+                <div className="grid gap-2.5 sm:gap-3 grid-cols-[repeat(auto-fill,minmax(min(9.5rem,calc(50%_-_0.375rem)),1fr))]">
                   {filteredProducts.map((p) => {
                     const out = isOut(p);
                     const inBill = lineInBill(p._id);
@@ -700,16 +839,16 @@ export default function Billing({ mode = 'retail' }) {
                           <ProductThumb product={p} className="w-full h-full transition-transform duration-300 group-hover:scale-105" />
                           {inBill && (
                             <span className="absolute top-2 right-2 min-w-[1.75rem] h-7 px-2 rounded-full bg-emerald-700 text-white text-xs font-bold flex items-center justify-center shadow">
-                              {isRetail ? formatQty(inBill.quantity, unitOf(p)) : lineCountLabel(mode, inBill)}
+                              {lineCountLabel(mode, inBill, config)}
                             </span>
                           )}
                           {out && <span className="absolute inset-x-0 bottom-0 bg-gray-900/80 text-white text-[11px] font-semibold uppercase tracking-wider text-center py-1">Out of stock</span>}
                         </div>
-                        <div className="p-3">
-                          <div className="font-semibold text-gray-900 text-sm leading-snug line-clamp-2 min-h-[2.5rem]">{p.itemName}</div>
+                        <div className="p-2.5 sm:p-3">
+                          <div className="font-semibold text-gray-900 text-sm leading-snug line-clamp-2 min-h-[2.5rem] break-words">{p.itemName}</div>
                           <div className="mt-1 font-bold text-emerald-700">{priceLabel(p)}</div>
                           <div className={`mt-1 text-[11px] font-medium truncate ${isLowStock(p) && !out ? 'text-amber-600' : 'text-gray-500'}`}>
-                            {out ? (isRetail ? 'None left' : `Not enough for a ${countWord}`) : `${stockLeft(p)} left`}
+                            {out ? (isRetail ? 'None left' : `Not enough for a ${mode === 'event' ? 'box' : countWordOf(newStallLine(p))}`) : `${stockLeft(p)} left`}
                             {!isRetail && <span className="text-gray-400"> · {formatQty(p.stock, unitOf(p))} in stock</span>}
                           </div>
                         </div>
@@ -727,254 +866,323 @@ export default function Billing({ mode = 'retail' }) {
           </section>
 
           {/* Right – Order (products + quantities) */}
-          <aside className="lg:sticky lg:top-24 bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden flex flex-col lg:max-h-[calc(100vh-8rem)]">
-            <div className="px-5 py-4 bg-gray-900 text-white flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <ShoppingBag size={20} />
-                <h2 className="text-lg font-semibold">Order</h2>
-                {itemCount > 0 && <span className="px-2 py-0.5 rounded-full bg-white/15 text-xs font-semibold">{itemCount} {itemCount === 1 ? 'item' : 'items'}</span>}
-              </div>
-              {itemCount > 0 && (
-                <button type="button" onClick={clearBill} className="text-sm font-medium text-white/80 hover:text-white px-3 py-1 hover:bg-white/10">
-                  Clear
-                </button>
-              )}
-            </div>
+          {/* Narrow layouts show the order as a sheet / drawer. It is portalled to <body> because the page wrapper's
+              entry animation uses a transform, which would otherwise trap position:fixed inside the page. */}
+          {(() => {
+            const panel = (
+              <>
+                {!wide && orderOpen && <div className="fixed inset-0 z-[45] bg-black/40 animate-fade-in" onClick={() => setOrderOpen(false)} aria-hidden="true" />}
+                <aside
+                  aria-label="Order"
+                  {...(!wide && orderOpen ? { role: 'dialog', 'aria-modal': true } : {})}
+                  className={wide
+                    ? 'bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col'
+                    : orderOpen
+                      ? 'bill-sheet fixed z-[46] inset-x-0 bottom-0 max-h-[90dvh] rounded-t-3xl sm:inset-x-auto sm:right-0 sm:top-0 sm:bottom-0 sm:max-h-none sm:w-[min(440px,100%)] sm:rounded-none sm:rounded-l-3xl bg-white shadow-2xl flex flex-col overflow-y-auto overscroll-contain'
+                      : 'hidden'}
+                >
+                  {!wide && <div className="sm:hidden flex justify-center pt-2 pb-1 bg-gray-900"><span className="w-10 h-1 rounded-full bg-white/30" /></div>}
+                  <div className={`sticky ${wide ? 'top-14 sm:top-16 md:top-20 rounded-t-2xl' : 'top-0'} z-10 px-4 sm:px-5 py-3 bg-gray-900 text-white flex items-center justify-between gap-2`}>
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <ShoppingBag size={20} />
+                      <h2 className="text-lg font-semibold">Order</h2>
+                      {itemCount > 0 && <span className="px-2 py-0.5 rounded-full bg-white/15 text-xs font-semibold">{itemCount} {itemCount === 1 ? 'item' : 'items'}</span>}
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      {itemCount > 0 && (
+                        <button type="button" onClick={clearBill} className="text-sm font-medium text-white/80 hover:text-white px-3 py-1.5 hover:bg-white/10">
+                          Clear
+                        </button>
+                      )}
+                      {!wide && (
+                        <button type="button" onClick={() => setOrderOpen(false)} aria-label="Close order" className="p-2 text-white/80 hover:text-white hover:bg-white/10">
+                          <X size={18} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
 
-            {mode === 'stall' && <ScoopSize value={scoopInput} onChange={setScoopInput} fallback={config.scoopGrams} error={scoopError} />}
+                  {mode === 'stall' && <ScoopSize value={scoopInput} onChange={setScoopInput} fallback={config.scoopGrams} error={scoopError} />}
 
-            <div className="flex-1 overflow-y-auto p-5">
-              {itemCount === 0 ? (
-                <div className="py-10 text-center">
-                  <div className="w-14 h-14 mx-auto rounded-full bg-emerald-50 text-emerald-700 flex items-center justify-center"><ShoppingBag size={24} /></div>
-                  <p className="mt-3 font-medium text-gray-700">No items yet</p>
-                  <p className="text-sm text-gray-500">{mode === 'event' ? 'Tap a flavour, pick a box size, then the number of boxes.' : mode === 'stall' ? 'Tap a flavour to add a scoop; tap again for more.' : 'Tap a product to add it, then set the quantity.'}</p>
-                </div>
-              ) : (
-                <ul className="space-y-4">
-                  {lines.map((bi, idx) => (
-                    <li key={bi.item._id} className="flex gap-3 bill-rise">
-                      <ProductThumb product={bi.item} className="w-12 h-12 rounded-lg shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="font-medium text-gray-900 text-sm truncate">{bi.item.itemName}</div>
-                            <div className="text-xs text-gray-500">
-                              {mode === 'event' ? <>{inr(pricePerLitre(bi.item, gpl))}/L · {formatQty((Number(bi.boxSize) || 0) * (Number(bi.boxes) || 0))} L</>
-                                : mode === 'stall' ? <>{inr(pricePerScoop(bi.item, gpl, scoopGrams))}/scoop</>
-                                : <>₹{bi.item.price}{perLabel(bi.item)}</>}
-                              {bi.item.gstIncluded && <span className="ml-1.5 px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-semibold uppercase">incl. GST</span>}
+                  <div className="px-4 sm:px-5">
+                    {itemCount === 0 ? (
+                      <div className="py-8 text-center">
+                        <div className="w-12 h-12 mx-auto rounded-full bg-emerald-50 text-emerald-700 flex items-center justify-center"><ShoppingBag size={22} /></div>
+                        <p className="mt-3 font-medium text-gray-700">No items yet</p>
+                        <p className="text-sm text-gray-500">{mode === 'event' ? 'Tap a flavour, pick a litre size, then the number of boxes.' : mode === 'stall' ? 'Tap a flavour to add a scoop or piece; tap again for more.' : 'Tap a product to add it, then set the quantity and unit.'}</p>
+                      </div>
+                    ) : (
+                      <ul className="divide-y divide-gray-100">
+                        {lines.map((bi, idx) => {
+                          const id = bi.item._id;
+                          const over = bi.quantity > Number(bi.item.stock) + 1e-6;
+                          const discShown = bi.discOpen || (bi.discInput ?? '') !== '';
+                          const sizes = [...new Set([...boxSuggestions, Number(bi.boxSize)])].sort((a, b) => a - b);
+                          return (
+                            <li key={id} className="py-2.5 bill-rise">
+                              {/* Row 1: name + amount */}
+                              <div className="flex items-baseline justify-between gap-3">
+                                <div className="min-w-0 flex items-baseline gap-1.5">
+                                  <span className="font-semibold text-gray-900 text-sm truncate" title={bi.item.itemName}>{bi.item.itemName}</span>
+                                  {bi.item.gstIncluded && <span className="shrink-0 px-1 rounded bg-emerald-100 text-emerald-700 text-[9px] font-bold uppercase leading-4" title="Price includes GST">incl</span>}
+                                </div>
+                                <div className="shrink-0 text-right tabular-nums">
+                                  {lineDiscounts[idx] > 0 && <span className="mr-1.5 text-[11px] text-gray-400 line-through">{inr(bi.subtotal)}</span>}
+                                  <span className={`font-bold text-sm ${lineDiscounts[idx] > 0 ? 'text-emerald-700' : 'text-gray-900'}`}>{inr(bi.subtotal - (lineDiscounts[idx] || 0))}</span>
+                                </div>
+                              </div>
+                              {/* Row 2: rate + stock it uses */}
+                              <div className={`mt-0.5 text-[11px] truncate ${over ? 'text-red-600 font-medium' : 'text-gray-500'}`}>
+                                {mode === 'event' ? <>{inr(pricePer('ltr', bi.item, config))}/L · {formatQty((Number(bi.boxSize) || 0) * (Number(bi.boxes) || 0))} L</>
+                                  : mode === 'stall' ? <>{inr(stallPrice(bi.item, stallUnitOf(bi, config)))}/{PER_WORD[stallUnitOf(bi, config)]}</>
+                                  : sellUnitOf(bi) !== unitOf(bi.item) ? <>{inr(pricePer(sellUnitOf(bi), bi.item, config))}/{PER_WORD[sellUnitOf(bi)]} · ₹{bi.item.price}{perLabel(bi.item) || '/pc'}</>
+                                  : <>₹{bi.item.price}{perLabel(bi.item)}</>}
+                                {(!isRetail || sellUnitOf(bi) !== unitOf(bi.item) || over) && (
+                                  <> · {over ? 'only ' : 'uses '}{formatQty(over ? bi.item.stock : bi.quantity, unitOf(bi.item))}{unitOf(bi.item) === 'pcs' ? ' pcs' : ''}{over ? ' in stock' : ` of ${formatQty(bi.item.stock, unitOf(bi.item))}${unitOf(bi.item) === 'pcs' ? ' pcs' : ''}`}</>
+                                )}
+                              </div>
+                              {/* Row 3: [box size] stepper · discount · remove */}
+                              <div className="mt-1.5 flex items-center gap-1.5">
+                                {mode === 'event' && (customBoxInput[id] !== undefined ? (
+                                  <form onSubmit={(e) => { e.preventDefault(); applyCustomBox(id); }} className="shrink-0 flex items-center h-8 [@media(pointer:coarse)]:h-10 border border-gray-900 rounded-lg overflow-hidden">
+                                    <input type="number" inputMode="decimal" min={MIN_LITRES} max="50" step="0.05" placeholder="L" autoFocus
+                                      value={customBoxInput[id]} onChange={(e) => setCustomBoxInput((m) => ({ ...m, [id]: e.target.value }))}
+                                      onKeyDown={(e) => e.key === 'Escape' && setCustomBoxInput((m) => ({ ...m, [id]: undefined }))}
+                                      aria-label={`Custom box size in litres for ${bi.item.itemName}`}
+                                      className="w-12 h-full px-2 text-xs font-semibold bg-transparent !border-0 !shadow-none outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" />
+                                    <button type="submit" aria-label="Use this size" className="h-full px-2 bg-gray-900 text-white"><Check size={13} /></button>
+                                  </form>
+                                ) : (
+                                  <select value={String(Number(bi.boxSize))} aria-label={`Box size for ${bi.item.itemName}`}
+                                    onChange={(e) => {
+                                      const v = e.target.value;
+                                      if (v === 'custom') setCustomBoxInput((m) => ({ ...m, [id]: '' }));
+                                      else if (v === 'forget') forgetCustomBoxes();
+                                      else setBoxSize(id, Number(v));
+                                    }}
+                                    className="shrink-0 h-8 [@media(pointer:coarse)]:h-10 pl-2 pr-1 text-xs font-semibold text-gray-800 bg-white border border-gray-200 rounded-lg outline-none cursor-pointer">
+                                    {sizes.map((sz) => <option key={sz} value={String(sz)}>{fmtLitres(sz)} box</option>)}
+                                    <option value="custom">Custom size…</option>
+                                    {customBoxes.length > 0 && <option value="forget">Forget custom sizes</option>}
+                                  </select>
+                                ))}
+                                <div className="flex items-center border border-gray-200 rounded-full p-0.5 shrink-0">
+                                  <button type="button" onClick={() => changeQuantity(id, -1)} aria-label={`Decrease ${bi.item.itemName}`}
+                                    className={`w-7 h-7 ${TAP_SQ} shrink-0 rounded-full hover:bg-gray-100 flex items-center justify-center text-gray-600`}>
+                                    <Minus size={14} />
+                                  </button>
+                                  <input
+                                    type="number"
+                                    inputMode="decimal"
+                                    min="0"
+                                    step={isRetail ? unitStep({ unit: sellUnitOf(bi) }) : 1}
+                                    value={bi[countFieldOf(bi)]}
+                                    onChange={(e) => setQuantity(id, e.target.value)}
+                                    aria-label={isRetail ? `Quantity in ${sellUnitOf(bi)}` : `Number of ${countWordOf(bi)}s`}
+                                    className="w-10 h-7 text-center font-semibold text-sm text-gray-900 bg-transparent !border-0 !shadow-none outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                                  />
+                                  {isRetail ? (
+                                    retailUnits(bi.item, config).length > 1 ? (
+                                      <select value={sellUnitOf(bi)} onChange={(e) => setSellUnit(id, e.target.value)} aria-label={`Unit for ${bi.item.itemName}`}
+                                        className="h-7 pl-1 pr-0.5 text-xs font-semibold text-gray-700 bg-gray-50 border-0 rounded outline-none cursor-pointer">
+                                        {retailUnits(bi.item, config).map((u) => <option key={u} value={u}>{UNIT_WORD[u]}</option>)}
+                                      </select>
+                                    ) : unitOf(bi.item) !== 'pcs' && <span className="text-xs text-gray-400 pr-1">{UNIT_WORD[unitOf(bi.item)]}</span>
+                                  ) : mode === 'stall' && stallUnits(bi.item, config).length > 1 ? (
+                                    <select value={stallUnitOf(bi, config)} onChange={(e) => setStallUnit(id, e.target.value)} aria-label={`Scoops or pieces for ${bi.item.itemName}`}
+                                      className="h-7 pl-1 pr-0.5 text-xs font-semibold text-gray-700 bg-gray-50 border-0 rounded outline-none cursor-pointer">
+                                      {stallUnits(bi.item, config).map((u) => <option key={u} value={u}>{u === 'pcs' ? 'pcs' : 'scoops'}</option>)}
+                                    </select>
+                                  ) : <span className="text-xs text-gray-400 pr-1">{mode === 'event' ? (Number(bi.boxes) === 1 ? 'box' : 'boxes') : stallUnitOf(bi, config) === 'pcs' ? 'pcs' : (Number(bi.scoops) === 1 ? 'scoop' : 'scoops')}</span>}
+                                  <button type="button" onClick={() => changeQuantity(id, 1)} aria-label={`Increase ${bi.item.itemName}`}
+                                    className={`w-7 h-7 ${TAP_SQ} shrink-0 rounded-full hover:bg-gray-100 flex items-center justify-center text-gray-600`}>
+                                    <Plus size={14} />
+                                  </button>
+                                </div>
+                                <span className="flex-1" />
+                                <button type="button" onClick={() => setLineDiscount(id, discShown ? { discInput: '', discOpen: false } : { discOpen: true })}
+                                  aria-label={discShown ? `Remove discount on ${bi.item.itemName}` : `Add discount on ${bi.item.itemName}`} aria-pressed={discShown}
+                                  title={discShown ? 'Remove item discount' : 'Item discount'}
+                                  className={`shrink-0 w-8 h-8 ${TAP_SQ} rounded-lg flex items-center justify-center transition-colors ${discShown ? 'bg-emerald-50 text-emerald-700' : 'text-gray-400 hover:text-emerald-700 hover:bg-emerald-50'}`}>
+                                  <Tag size={15} />
+                                </button>
+                                <button type="button" onClick={() => removeItem(id)} aria-label={`Remove ${bi.item.itemName}`} title="Remove"
+                                  className={`shrink-0 w-8 h-8 ${TAP_SQ} rounded-lg flex items-center justify-center text-gray-400 hover:text-red-600 hover:bg-red-50`}>
+                                  <Trash2 size={15} />
+                                </button>
+                              </div>
+                              {/* Optional row: item discount */}
+                              {discShown && (
+                                <div className="mt-1.5 flex items-center gap-1.5">
+                                  <div role="radiogroup" aria-label={`Discount type for ${bi.item.itemName}`} className="flex shrink-0 border border-gray-200 rounded-lg overflow-hidden bg-white">
+                                    {[['amount', '₹'], ['percent', '%']].map(([t, sym]) => (
+                                      <button key={t} type="button" role="radio" aria-checked={(bi.discType || 'amount') === t}
+                                        aria-label={t === 'amount' ? 'Item discount in rupees' : 'Item discount in percent'}
+                                        onClick={() => setLineDiscount(id, { discType: t })}
+                                        className={`w-8 h-8 text-xs font-semibold transition-colors ${(bi.discType || 'amount') === t ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
+                                        {sym}
+                                      </button>
+                                    ))}
+                                  </div>
+                                  <input
+                                    type="number"
+                                    inputMode="decimal"
+                                    min="0"
+                                    step="0.01"
+                                    autoFocus={bi.discOpen && (bi.discInput ?? '') === ''}
+                                    placeholder="Item discount"
+                                    value={bi.discInput ?? ''}
+                                    onChange={(e) => setLineDiscount(id, { discInput: e.target.value })}
+                                    aria-label={`Discount for ${bi.item.itemName}`}
+                                    aria-invalid={!!lineDiscountErrorOf[idx]}
+                                    className={`flex-1 min-w-0 h-8 px-2.5 border rounded-lg bg-white text-xs outline-none ${lineDiscountErrorOf[idx] ? 'border-red-400' : 'border-gray-200'} [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`}
+                                  />
+                                  <span className={`shrink-0 text-[11px] font-medium ${lineDiscountErrorOf[idx] ? 'text-red-600' : 'text-emerald-700'}`}>
+                                    {lineDiscountErrorOf[idx] ? 'Invalid' : lineDiscounts[idx] > 0 ? `−${inr(lineDiscounts[idx])}` : ''}
+                                  </span>
+                                </div>
+                              )}
+                              {discShown && lineDiscountErrorOf[idx] && <p className="mt-1 text-[11px] text-red-600">{lineDiscountErrorOf[idx]}</p>}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </div>
+
+                  {itemCount > 0 && (
+                    <div className="px-4 sm:px-5 py-3 border-t border-gray-100 bg-gray-50/60 space-y-2.5">
+                      {/* Coupon / overall discount: folded into two small buttons until needed */}
+                      {coupon ? (
+                        <div className={`flex items-center gap-2.5 px-3 py-2 rounded-lg border ${couponShort ? 'border-amber-300 bg-amber-50' : 'border-emerald-300 bg-emerald-50'}`}>
+                          <TicketPercent size={18} className={couponShort ? 'text-amber-600 shrink-0' : 'text-emerald-700 shrink-0'} />
+                          <div className="flex-1 min-w-0 leading-tight">
+                            <div className="font-mono font-bold text-sm text-gray-900 tracking-wider">{coupon.code}</div>
+                            <div className={`text-[11px] truncate ${couponShort ? 'text-amber-700' : 'text-emerald-800'}`}>
+                              {couponShort ? `Add ${inr(couponShort)} more to use this coupon` : `${offerText(coupon)} · saves ${inr(couponAmount)}`}
                             </div>
                           </div>
-                          <div className="text-right whitespace-nowrap">
-                            {lineDiscounts[idx] > 0 ? (
-                              <>
-                                <div className="text-[11px] text-gray-400 line-through">{inr(bi.subtotal)}</div>
-                                <div className="font-semibold text-emerald-700 text-sm">{inr(bi.subtotal - lineDiscounts[idx])}</div>
-                              </>
-                            ) : <div className="font-semibold text-gray-900 text-sm">{inr(bi.subtotal)}</div>}
-                          </div>
+                          <button type="button" onClick={removeCoupon} aria-label="Remove coupon" className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-white rounded"><X size={15} /></button>
                         </div>
-                        {!isRetail && (
-                          <div className={`mt-1 text-[11px] font-medium ${bi.quantity > bi.item.stock ? 'text-red-600' : 'text-gray-500'}`}>
-                            Uses {formatQty(bi.quantity, unitOf(bi.item))} of {formatQty(bi.item.stock, unitOf(bi.item))} in stock
-                          </div>
-                        )}
-                        {mode === 'event' && (
-                          <div role="radiogroup" aria-label={`Box size for ${bi.item.itemName}`} className="mt-2 flex flex-wrap gap-1.5">
-                            {config.boxSizes.map((sz) => (
-                              <button key={sz} type="button" role="radio" aria-checked={Number(bi.boxSize) === sz} onClick={() => setBoxSize(bi.item._id, sz)}
-                                className={`px-2.5 h-7 text-xs font-semibold border transition-colors ${Number(bi.boxSize) === sz ? 'bg-gray-900 border-gray-900 text-white' : 'bg-white border-gray-200 text-gray-600 hover:border-gray-400'}`}>
-                                {fmtLitres(sz)}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                        <div className="mt-2 flex items-center justify-between">
-                          <div className="flex items-center border border-gray-200 rounded-full p-0.5">
-                            <button type="button" onClick={() => changeQuantity(bi.item._id, -1)} aria-label={`Decrease ${bi.item.itemName}`}
-                              className="w-8 h-8 hover:bg-gray-100 flex items-center justify-center text-gray-600">
-                              <Minus size={14} />
-                            </button>
+                      ) : couponOpen ? (
+                        <form onSubmit={applyCoupon} className="flex gap-1.5">
+                          <input id="bill-coupon" type="text" autoFocus autoComplete="off" maxLength={20} placeholder="Coupon code" aria-label="Coupon code" value={couponInput}
+                            onChange={(e) => setCouponInput(e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, ''))}
+                            className="flex-1 min-w-0 h-9 px-3 border border-gray-200 rounded-lg bg-white text-sm font-mono tracking-wider outline-none placeholder:font-sans placeholder:tracking-normal" />
+                          <button type="submit" disabled={!couponInput.trim() || couponBusy}
+                            className="h-9 px-3.5 rounded-lg bg-gray-900 hover:bg-gray-800 disabled:opacity-50 text-white text-sm font-semibold flex items-center gap-1.5">
+                            {couponBusy ? <Loader2 size={14} className="animate-spin" /> : null} Apply
+                          </button>
+                          <button type="button" onClick={() => { setCouponOpen(false); setCouponInput(''); }} aria-label="Close coupon"
+                            className="w-9 h-9 flex items-center justify-center text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg"><X size={15} /></button>
+                        </form>
+                      ) : billDiscOpen || discountInput !== '' ? (
+                        <div>
+                          <div className="flex gap-1.5">
+                            <div role="radiogroup" aria-label="Discount type" className="flex shrink-0 border border-gray-200 rounded-lg overflow-hidden bg-white">
+                              {[['amount', '₹'], ['percent', '%']].map(([t, sym]) => (
+                                <button key={t} type="button" role="radio" aria-checked={discountType === t}
+                                  aria-label={t === 'amount' ? 'Discount in rupees' : 'Discount in percent'}
+                                  onClick={() => setDiscountType(t)}
+                                  className={`w-9 h-9 text-sm font-semibold transition-colors ${discountType === t ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
+                                  {sym}
+                                </button>
+                              ))}
+                            </div>
                             <input
+                              id="bill-discount"
                               type="number"
                               inputMode="decimal"
                               min="0"
-                              step={isRetail ? unitStep(bi.item) : 1}
-                              value={isRetail ? bi.quantity : bi[countField]}
-                              onChange={(e) => setQuantity(bi.item._id, e.target.value)}
-                              aria-label={isRetail ? `Quantity in ${unitOf(bi.item)}` : `Number of ${countWord}s`}
-                              className="w-14 h-8 text-center font-semibold text-sm text-gray-900 bg-transparent !border-0 !shadow-none outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                              max={discountType === 'percent' ? 100 : undefined}
+                              step="0.01"
+                              autoFocus={discountInput === ''}
+                              placeholder={itemCount > 1 ? 'Overall discount' : 'Bill discount'}
+                              aria-label={itemCount > 1 ? 'Overall discount' : 'Bill discount'}
+                              value={discountInput}
+                              onChange={(e) => setDiscountInput(e.target.value)}
+                              aria-invalid={!!discountError}
+                              className={`flex-1 min-w-0 h-9 px-3 border rounded-lg bg-white text-sm outline-none ${discountError ? 'border-red-400' : 'border-gray-200'} [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`}
                             />
-                            {isRetail ? unitOf(bi.item) !== 'pcs' && <span className="text-xs text-gray-400 pr-1">{unitOf(bi.item)}</span>
-                              : <span className="text-xs text-gray-400 pr-1">{mode === 'event' ? (Number(bi.boxes) === 1 ? 'box' : 'boxes') : (Number(bi.scoops) === 1 ? 'scoop' : 'scoops')}</span>}
-                            <button type="button" onClick={() => changeQuantity(bi.item._id, 1)} aria-label={`Increase ${bi.item.itemName}`}
-                              className="w-8 h-8 hover:bg-gray-100 flex items-center justify-center text-gray-600">
-                              <Plus size={14} />
-                            </button>
+                            <button type="button" onClick={() => { setDiscountInput(''); setBillDiscOpen(false); }} aria-label="Remove discount"
+                              className="w-9 h-9 flex items-center justify-center text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg"><X size={15} /></button>
                           </div>
-                          <button type="button" onClick={() => removeItem(bi.item._id)} aria-label={`Remove ${bi.item.itemName}`}
-                            className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50">
-                            <Trash2 size={16} />
+                          {discountError && <p className="mt-1 text-xs text-red-600">{discountError}</p>}
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-2">
+                          <button type="button" onClick={() => setBillDiscOpen(true)}
+                            className="h-9 [@media(pointer:coarse)]:h-10 rounded-lg border border-dashed border-gray-300 text-xs font-semibold text-gray-600 hover:border-emerald-600 hover:text-emerald-700 flex items-center justify-center gap-1.5">
+                            <Tag size={14} /> {itemCount > 1 ? 'Overall discount' : 'Discount'}
+                          </button>
+                          <button type="button" onClick={() => setCouponOpen(true)}
+                            className="h-9 [@media(pointer:coarse)]:h-10 rounded-lg border border-dashed border-gray-300 text-xs font-semibold text-gray-600 hover:border-emerald-600 hover:text-emerald-700 flex items-center justify-center gap-1.5">
+                            <TicketPercent size={14} /> Coupon
                           </button>
                         </div>
-                        {bi.discOpen || (bi.discInput ?? '') !== '' ? (
-                          <div className="mt-2">
-                            <div className="flex items-center gap-1.5">
-                              <Tag size={13} className="text-gray-400 shrink-0" />
-                              <div role="radiogroup" aria-label={`Discount type for ${bi.item.itemName}`} className="flex shrink-0 border border-gray-200 bg-white">
-                                {[['amount', '₹'], ['percent', '%']].map(([t, sym]) => (
-                                  <button key={t} type="button" role="radio" aria-checked={(bi.discType || 'amount') === t}
-                                    aria-label={t === 'amount' ? 'Item discount in rupees' : 'Item discount in percent'}
-                                    onClick={() => setLineDiscount(bi.item._id, { discType: t })}
-                                    className={`w-8 h-8 text-xs font-semibold transition-colors ${(bi.discType || 'amount') === t ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
-                                    {sym}
-                                  </button>
-                                ))}
-                              </div>
-                              <input
-                                type="number"
-                                inputMode="decimal"
-                                min="0"
-                                step="0.01"
-                                autoFocus={bi.discOpen && (bi.discInput ?? '') === ''}
-                                placeholder="Item discount"
-                                value={bi.discInput ?? ''}
-                                onChange={(e) => setLineDiscount(bi.item._id, { discInput: e.target.value })}
-                                aria-label={`Discount for ${bi.item.itemName}`}
-                                aria-invalid={!!lineDiscountErrorOf[idx]}
-                                className={`flex-1 min-w-0 h-8 px-2.5 border bg-white text-xs outline-none ${lineDiscountErrorOf[idx] ? 'border-red-400' : 'border-gray-200'} [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`}
-                              />
-                              <button type="button" onClick={() => setLineDiscount(bi.item._id, { discInput: '', discOpen: false })} aria-label={`Remove discount on ${bi.item.itemName}`}
-                                className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100"><X size={14} /></button>
-                            </div>
-                            {lineDiscountErrorOf[idx]
-                              ? <p className="mt-1 text-[11px] text-red-600">{lineDiscountErrorOf[idx]}</p>
-                              : lineDiscounts[idx] > 0 && <p className="mt-1 text-[11px] text-emerald-700 font-medium">Saves {inr(lineDiscounts[idx])}</p>}
-                          </div>
-                        ) : (
-                          <button type="button" onClick={() => setLineDiscount(bi.item._id, { discOpen: true })}
-                            className="mt-1 flex items-center gap-1 text-xs font-medium text-emerald-700 hover:text-emerald-800">
-                            <Tag size={12} /> Add item discount
-                          </button>
-                        )}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
+                      )}
 
-            <div className="p-5 border-t border-gray-100 bg-gray-50/60 space-y-4">
-              {itemCount > 0 && (coupon ? (
-                <div className={`flex items-center gap-3 p-3 border ${couponShort ? 'border-amber-300 bg-amber-50' : 'border-emerald-300 bg-emerald-50'}`}>
-                  <TicketPercent size={20} className={couponShort ? 'text-amber-600 shrink-0' : 'text-emerald-700 shrink-0'} />
-                  <div className="flex-1 min-w-0">
-                    <div className="font-mono font-bold text-sm text-gray-900 tracking-wider">{coupon.code}</div>
-                    <div className={`text-xs ${couponShort ? 'text-amber-700' : 'text-emerald-800'}`}>
-                      {couponShort ? `Add ${inr(couponShort)} more to use this coupon` : `${offerText(coupon)} · saves ${inr(couponAmount)}`}
+                      {/* Summary */}
+                      <div className="space-y-1 text-[13px]">
+                        {(mode === 'event' || mode === 'stall') && (
+                          <div className="flex justify-between text-gray-500">
+                            <span>{mode === 'event' ? 'Total volume' : 'Quantity'}</span>
+                            <span className="font-medium text-gray-900">
+                              {mode === 'event' ? `${formatQty(totalLitres)} L` : [totalScoops > 0 && `${totalScoops} scoop${totalScoops === 1 ? '' : 's'}`, totalPieces > 0 && `${totalPieces} pcs`].filter(Boolean).join(' · ')}
+                            </span>
+                          </div>
+                        )}
+                        {anyDiscount && <div className="flex justify-between text-gray-500"><span>Items total</span><span className="tabular-nums">{inr(gross)}</span></div>}
+                        {itemDiscount > 0 && <div className="flex justify-between text-emerald-700 font-medium"><span>Item discounts</span><span className="tabular-nums">− {inr(itemDiscount)}</span></div>}
+                        {discountAmount > 0 && <div className="flex justify-between text-emerald-700 font-medium"><span>{discLabel}</span><span className="tabular-nums">− {inr(discountAmount)}</span></div>}
+                        <div className="flex justify-between text-gray-500"><span>{anyDiscount ? 'Taxable value' : 'Subtotal'}</span><span className="tabular-nums">{inr(subTotal)}</span></div>
+                        <div className="flex justify-between text-gray-500">
+                          <span>GST (5%){hasInclusive && <span className="text-gray-400 text-[11px]"> · incl items already contain it</span>}</span>
+                          <span className="tabular-nums">{inr(gstAmount)}</span>
+                        </div>
+                        {anyDiscount && <p className="text-[11px] text-gray-400">Discounts come off before GST{itemDiscount > 0 && discountAmount > 0 ? `; the ${coupon ? 'coupon' : 'overall discount'} applies after item discounts` : ''}.</p>}
+                      </div>
                     </div>
-                  </div>
-                  <button type="button" onClick={removeCoupon} aria-label="Remove coupon" className="p-2 text-gray-400 hover:text-gray-700 hover:bg-white"><X size={16} /></button>
-                </div>
-              ) : couponOpen ? (
-                <form onSubmit={applyCoupon}>
-                  <label htmlFor="bill-coupon" className="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-1.5"><TicketPercent size={14} /> Coupon code</label>
-                  <div className="flex gap-2">
-                    <input id="bill-coupon" type="text" autoFocus autoComplete="off" maxLength={20} placeholder="e.g. MANGO20" value={couponInput}
-                      onChange={(e) => setCouponInput(e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, ''))}
-                      className="flex-1 min-w-0 h-10 px-3 border border-gray-200 bg-white text-sm font-mono tracking-wider outline-none placeholder:font-sans placeholder:tracking-normal" />
-                    <button type="submit" disabled={!couponInput.trim() || couponBusy}
-                      className="h-10 px-4 bg-gray-900 hover:bg-gray-800 disabled:opacity-50 text-white text-sm font-semibold flex items-center gap-1.5">
-                      {couponBusy ? <Loader2 size={15} className="animate-spin" /> : null} Apply
+                  )}
+
+                  {/* Total + Continue: pinned to the bottom of the screen while the order is in view */}
+                  <div className="sticky bottom-0 z-10 mt-auto px-4 sm:px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t border-gray-100 bg-white rounded-b-2xl flex items-center gap-3">
+                    <div className="shrink-0 leading-tight">
+                      <div className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">Total</div>
+                      <div className="text-2xl font-bold text-emerald-700 tracking-tight tabular-nums">{inr(total)}</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={goToCustomer}
+                      disabled={itemCount === 0}
+                      className="flex-1 min-w-0 h-12 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold flex items-center justify-center gap-1.5 shadow-lg"
+                    >
+                      <span className="truncate">Continue</span> <ChevronRight size={18} className="shrink-0" />
                     </button>
-                    <button type="button" onClick={() => { setCouponOpen(false); setCouponInput(''); }} aria-label="Close coupon"
-                      className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100"><X size={16} /></button>
                   </div>
-                </form>
-              ) : (
-                <button type="button" onClick={() => setCouponOpen(true)} className="w-full flex items-center gap-2 text-sm font-medium text-emerald-700 hover:text-emerald-800">
-                  <TicketPercent size={16} /> Have a coupon code?
-                </button>
-              ))}
-              {itemCount > 0 && !coupon && (
-                <div>
-                  <label htmlFor="bill-discount" className="flex items-center gap-1.5 text-sm font-medium text-gray-700 mb-1.5">
-                    <Tag size={14} /> {itemCount > 1 ? 'Overall discount' : 'Bill discount'} <span className="font-normal text-gray-400">(optional)</span>
-                  </label>
-                  <div className="flex gap-2">
-                    <div role="radiogroup" aria-label="Discount type" className="flex shrink-0 border border-gray-200 bg-white">
-                      {[['amount', '₹'], ['percent', '%']].map(([t, sym]) => (
-                        <button key={t} type="button" role="radio" aria-checked={discountType === t}
-                          aria-label={t === 'amount' ? 'Discount in rupees' : 'Discount in percent'}
-                          onClick={() => setDiscountType(t)}
-                          className={`w-10 h-10 text-sm font-semibold transition-colors ${discountType === t ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
-                          {sym}
-                        </button>
-                      ))}
-                    </div>
-                    <input
-                      id="bill-discount"
-                      type="number"
-                      inputMode="decimal"
-                      min="0"
-                      max={discountType === 'percent' ? 100 : undefined}
-                      step="0.01"
-                      placeholder={discountType === 'percent' ? 'e.g. 10' : 'e.g. 50'}
-                      value={discountInput}
-                      onChange={(e) => setDiscountInput(e.target.value)}
-                      aria-invalid={!!discountError}
-                      className={`flex-1 min-w-0 h-10 px-3 border bg-white text-sm outline-none ${discountError ? 'border-red-400' : 'border-gray-200'} [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none`}
-                    />
-                    {discountInput !== '' && (
-                      <button type="button" onClick={() => setDiscountInput('')} aria-label="Remove discount"
-                        className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100"><X size={16} /></button>
-                    )}
-                  </div>
-                  {discountError && <p className="mt-1 text-xs text-red-600">{discountError}</p>}
-                </div>
-              )}
-              <div className="space-y-1.5 text-sm">
-                {mode === 'event' && itemCount > 0 && <div className="flex justify-between text-gray-600"><span>Total volume</span><span className="font-medium text-gray-900">{formatQty(totalLitres)} L</span></div>}
-                {mode === 'stall' && itemCount > 0 && <div className="flex justify-between text-gray-600"><span>Total scoops</span><span className="font-medium text-gray-900">{totalScoops} × {scoopGrams} g</span></div>}
-                {anyDiscount && (
-                  <>
-                    <div className="flex justify-between text-gray-600"><span>Items total</span><span>{inr(gross)}</span></div>
-                    {itemDiscount > 0 && <div className="flex justify-between text-emerald-700 font-medium"><span>Item discounts</span><span>− {inr(itemDiscount)}</span></div>}
-                    {discountAmount > 0 && <div className="flex justify-between text-emerald-700 font-medium"><span>{discLabel}</span><span>− {inr(discountAmount)}</span></div>}
-                  </>
-                )}
-                <div className="flex justify-between text-gray-600"><span>{anyDiscount ? 'Taxable value' : 'Subtotal'}</span><span>{inr(subTotal)}</span></div>
-                <div className="flex justify-between text-gray-600"><span>GST (5%)</span><span>{inr(gstAmount)}</span></div>
-                {hasInclusive && <p className="text-xs text-gray-500">Items marked "incl. GST" already contain their GST.</p>}
-                {anyDiscount && <p className="text-xs text-gray-500">Discounts are taken off before GST{itemDiscount > 0 && discountAmount > 0 ? `; the ${coupon ? 'coupon' : 'overall discount'} applies after item discounts` : ''}.</p>}
-                <div className="flex justify-between items-baseline pt-2">
-                  <span className="font-semibold text-gray-900">Total</span>
-                  <span className="text-3xl font-bold text-emerald-700 tracking-tight">{inr(total)}</span>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={goToCustomer}
-                disabled={itemCount === 0}
-                className="w-full h-12 bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold flex items-center justify-center gap-2 shadow-lg"
-              >
-                Continue to customer <ChevronRight size={18} />
-              </button>
-            </div>
-          </aside>
+                </aside>
+              </>
+            );
+            return !wide && orderOpen ? createPortal(panel, document.body) : panel;
+          })()}
         </div>
 
         {/* Mobile: total + Continue, stays at the bottom while browsing products */}
-        {itemCount > 0 && (
-          <div className="lg:hidden sticky bottom-3 z-20">
-            <button
-              type="button"
-              onClick={goToCustomer}
-              className="w-full h-14 px-5 bg-gray-900 text-white flex items-center justify-between shadow-xl sb-keep-shadow"
-            >
-              <span className="flex items-center gap-2 text-sm font-medium"><ShoppingBag size={18} /> {itemCount} {itemCount === 1 ? 'item' : 'items'} · {inr(total)}</span>
-              <span className="flex items-center gap-1 font-semibold">Continue <ChevronRight size={18} /></span>
+        {!wide && itemCount > 0 && (
+          <div className="sticky bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-20 flex h-14 rounded-full overflow-hidden bg-gray-900 text-white shadow-xl sb-keep-shadow">
+            <button type="button" onClick={() => setOrderOpen(true)} aria-label={`View order: ${itemCount} ${itemCount === 1 ? 'item' : 'items'}, ${inr(total)}`}
+              className="flex-1 min-w-0 pl-5 pr-3 flex items-center gap-3 text-left hover:bg-white/5">
+              <span key={itemCount} className="bill-rise relative shrink-0">
+                <ShoppingBag size={20} />
+                <span className="absolute -top-2 -right-2.5 min-w-[1.25rem] h-5 px-1 rounded-full bg-emerald-500 text-[11px] font-bold flex items-center justify-center">{itemCount}</span>
+              </span>
+              <span className="min-w-0 leading-tight">
+                <span className="block font-bold tabular-nums truncate">{inr(total)}</span>
+                <span className="flex items-center gap-0.5 text-xs text-white/70">View order <ChevronUp size={13} /></span>
+              </span>
+            </button>
+            <button type="button" onClick={goToCustomer} className="shrink-0 px-5 sm:px-6 bg-emerald-700 hover:bg-emerald-800 font-semibold flex items-center gap-1">
+              Continue <ChevronRight size={18} />
             </button>
           </div>
         )}
@@ -990,7 +1198,7 @@ export default function Billing({ mode = 'retail' }) {
             aria-modal="true"
             aria-label="Checkout"
             onClick={(e) => e.stopPropagation()}
-            className="bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl max-w-md w-full flex flex-col overflow-hidden animate-zoom-in max-h-[92vh]"
+            className="bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl max-w-md w-full flex flex-col overflow-hidden animate-zoom-in max-h-[92dvh]"
           >
             {/* Step 2: customer details */}
             {checkout === 'details' && (

@@ -6,7 +6,8 @@ const BIG_UNIT = { g: 'kg', ml: 'ltr' };
 const fmtNum = (n) => (Number.isInteger(n) ? String(n) : String(Number(n.toFixed(3))));
 
 // "16 ltr × ₹255/ltr" or "2 × ₹50": quantity sold × price of one unit
-const qtyRate = ({ quantity, unit, price, priceQty, boxes, boxSize, scoops, scoopGrams, total }) => {
+const qtyRate = ({ quantity, unit, price, priceQty, boxes, boxSize, scoops, scoopGrams, soldQty, soldUnit, total }) => {
+  if (soldQty > 0 && soldUnit) return `${fmtNum(Number(soldQty))} ${soldUnit === 'scoop' ? 'scoops' : soldUnit} × ${inr(Number(total) / soldQty)}/${soldUnit === 'pcs' ? 'pc' : soldUnit}`;
   if (boxes > 0) return `${boxes} box${boxes === 1 ? '' : 'es'} of ${fmtNum(Number(boxSize))} L × ${inr(Number(total) / boxes)}`;
   if (scoops > 0) return `${scoops} scoop${scoops === 1 ? '' : 's'} of ${fmtNum(Number(scoopGrams))} g × ${inr(Number(total) / scoops)}`;
   let u = unit || 'pcs';

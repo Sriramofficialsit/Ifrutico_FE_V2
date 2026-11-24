@@ -238,7 +238,7 @@
 .sb-app.sb-dark :is(input, select, textarea):focus { border-color: #34c38f !important; box-shadow: 0 0 0 3px rgba(52, 195, 143, 0.18) !important; }
 .sb-app.sb-dark select option { background: var(--th-surface-2); color: var(--sb-text); }
 /* Transparent inputs inside steppers / search pills stay transparent */
-.sb-app.sb-dark input.bg-transparent { background-color: transparent !important; }
+.sb-app.sb-dark :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"])).bg-transparent { background-color: transparent !important; }
 
 /* Brand green, readable on dark */
 .sb-app.sb-dark :is(.text-emerald-500, .text-emerald-600, .text-teal-600, .group:hover .group-hover\:text-emerald-500, .group:hover .group-hover\:text-emerald-600, .hover\:text-emerald-600:hover, .hover\:text-emerald-500:hover) { color: #4fd1a1 !important; }
@@ -291,15 +291,61 @@
 /* Frap glows on dark */
 .sb-app.sb-dark .sb-frap { background: linear-gradient(145deg, #2bb47f, #17845a); }
 
-/* ---- Live clock (top bar) ---- */
-.sb-app .sb-clock {
-  background: linear-gradient(135deg, rgba(0, 117, 74, 0.10), rgba(0, 117, 74, 0.04));
-  box-shadow: inset 0 0 0 1px rgba(0, 117, 74, 0.16);
+/* ---- Live clock (top bar): realistic LED / seven-segment panel ---- */
+.sb-led {
+  --led: #3dffb0;
+  --led-glow: rgba(61, 255, 176, 0.55);
+  position: relative;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.07) 0%, rgba(255,255,255,0) 45%),
+    radial-gradient(120% 140% at 50% 0%, #10201a 0%, #070d0b 70%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.10),
+    inset 0 -1px 0 rgba(0,0,0,0.6),
+    inset 0 0 0 1px rgba(61,255,176,0.10),
+    0 0 0 1px rgba(0,0,0,0.55),
+    0 6px 16px -6px rgba(0,0,0,0.45),
+    0 1px 2px rgba(0,0,0,0.25);
+  overflow: hidden;
 }
-.sb-app.sb-dark .sb-clock {
-  background: linear-gradient(135deg, rgba(52, 195, 143, 0.14), rgba(52, 195, 143, 0.04));
-  box-shadow: inset 0 0 0 1px rgba(110, 231, 183, 0.18), 0 0 18px -6px rgba(52, 195, 143, 0.35);
+/* glass glare + faint scanlines */
+.sb-led::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background:
+    linear-gradient(115deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0) 38%),
+    repeating-linear-gradient(0deg, rgba(0,0,0,0.18) 0 1px, transparent 1px 3px);
+  border-radius: inherit;
 }
-@keyframes sb-sec-in { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: none; } }
-.sb-clock-sec { display: inline-block; animation: sb-sec-in 0.28s ease-out; }
-@media (prefers-reduced-motion: reduce) { .sb-clock-sec { animation: none; } }
+.sb-app.sb-dark .sb-led {
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.08),
+    inset 0 0 0 1px rgba(61,255,176,0.16),
+    0 0 0 1px rgba(0,0,0,0.7),
+    0 0 22px -8px var(--led-glow);
+}
+
+.sb-seg { transform: skewX(-7deg); margin: 0 0.5px; overflow: visible; }
+.sb-seg polygon { transition: fill 0.12s ease, opacity 0.12s ease; }
+.sb-seg .on  { fill: var(--led); filter: drop-shadow(0 0 1.5px var(--led-glow)) drop-shadow(0 0 4px var(--led-glow)); }
+.sb-seg .off { fill: var(--led); opacity: 0.07; }
+
+.sb-led-colon { display: inline-flex; flex-direction: column; gap: 6px; margin: 0 3px; transform: skewX(-7deg); }
+.sb-led-colon i { width: 3.5px; height: 3.5px; border-radius: 1px; background: var(--led); opacity: 0.12; transition: opacity 0.15s ease; }
+.sb-led-colon.is-on i { opacity: 1; box-shadow: 0 0 4px var(--led-glow), 0 0 8px var(--led-glow); }
+
+.sb-led-label {
+  font-family: 'Outfit', 'Inter', sans-serif;
+  font-size: 9px; font-weight: 800; letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--led); text-shadow: 0 0 6px var(--led-glow);
+}
+.sb-led-dim { color: rgba(190, 255, 225, 0.55); text-shadow: none; letter-spacing: 0.08em; }
+.sb-led-on  { color: var(--led); text-shadow: 0 0 6px var(--led-glow); }
+.sb-led-off { color: var(--led); opacity: 0.15; text-shadow: none; }
+.sb-led-divider { width: 1px; height: 24px; background: linear-gradient(180deg, transparent, rgba(61,255,176,0.28), transparent); }
+
+.sb-led-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--led); box-shadow: 0 0 6px var(--led-glow); animation: sb-led-pulse 2s ease-in-out infinite; }
+@keyframes sb-led-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) {
+  .sb-led-dot { animation: none; }
+  .sb-seg polygon, .sb-led-colon i { transition: none; }
+}

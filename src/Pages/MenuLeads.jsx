@@ -2,9 +2,10 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Phone, Trash2, RefreshCw, Users, Download,
-  Search, ChevronDown, CheckCircle, AlertCircle
+  Search, ChevronDown, CheckCircle, AlertCircle, FileSpreadsheet
 } from "lucide-react";
 import toast from 'react-hot-toast';
+import { exportXlsx, stamp } from '../utils/xlsx';
 
 const API = "/api/menu-leads";
 
@@ -14,6 +15,7 @@ export default function MenuLeads() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [deletingId, setDeletingId] = useState(null);
+  const [exporting, setExporting] = useState(false);
 
   const fetchLeads = async () => {
     setLoading(true);
@@ -56,6 +58,27 @@ export default function MenuLeads() {
     }
   };
 
+  // Exports what the table shows (respects the search box)
+  const handleExport = async () => {
+    if (exporting || !filtered.length) return;
+    setExporting(true);
+    try {
+      await exportXlsx({
+        fileName: `Menu_Leads_${stamp()}`,
+        sheetName: 'Menu Leads',
+        columns: [
+          { header: 'Mobile', key: 'mobile', width: 16 },
+          { header: 'Downloaded At', value: (l) => (l.downloadedAt ? new Date(l.downloadedAt) : ''), numFmt: 'dd-mmm-yyyy hh:mm', width: 18 },
+        ],
+        rows: filtered,
+      });
+    } catch (err) {
+      toast.error(err?.message || 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const exportCSV = () => {
     const rows = [["Mobile", "Downloaded At"], ...leads.map(l => [l.mobile, new Date(l.downloadedAt).toLocaleString()])];
     const csv = rows.map(r => r.join(",")).join("\n");
@@ -76,7 +99,7 @@ export default function MenuLeads() {
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 tracking-tight">Menu Leads</h1>
           <p className="text-sm text-gray-500 mt-1">Visitors who downloaded the Frutico menu PDF</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <button
             onClick={fetchLeads}
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors text-sm font-medium"
@@ -91,6 +114,10 @@ export default function MenuLeads() {
           >
             <Download className="w-4 h-4" />
             Export CSV
+          </button>
+          <button onClick={handleExport} disabled={exporting || !filtered.length} className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 transition-colors text-sm font-semibold disabled:opacity-50">
+            {exporting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+            Export
           </button>
         </div>
       </div>

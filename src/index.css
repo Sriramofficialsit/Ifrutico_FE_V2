@@ -108,8 +108,13 @@
 .bill-draw { stroke-dasharray: 100; stroke-dashoffset: 100; animation: billDraw 0.5s ease-out forwards; }
 .bill-confetti { animation: billConfetti 1s cubic-bezier(0.15, 0.6, 0.3, 1) forwards; }
 .bill-rise { animation: billRise 0.4s ease-out both; }
+/* Billing order panel on narrow layouts: slides up on phones, in from the right on tablets */
+@keyframes billSheetUp { from { transform: translateY(100%); } to { transform: none; } }
+@keyframes billSheetLeft { from { transform: translateX(100%); } to { transform: none; } }
+.bill-sheet { animation: billSheetUp 0.28s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+@media (min-width: 640px) { .bill-sheet { animation-name: billSheetLeft; } }
 @media (prefers-reduced-motion: reduce) {
-  .bill-print, .bill-pop, .bill-confetti, .bill-rise { animation: none; }
+  .bill-print, .bill-pop, .bill-confetti, .bill-rise, .bill-sheet { animation: none; }
   .bill-confetti { display: none; }
   .bill-draw { animation: none; stroke-dashoffset: 0; }
 }

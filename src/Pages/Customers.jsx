@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { Search, X, Phone, Mail, FileText, Download, Loader2, ChevronLeft, ChevronRight, Users, IndianRupee, Receipt } from 'lucide-react';
+import { Search, X, Phone, Mail, FileText, Download, Loader2, ChevronLeft, ChevronRight, Users, IndianRupee, Receipt, FileSpreadsheet } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { apiFetch, downloadInvoicePdf } from '../utils/api';
 import ReportDialog from '../Components/ReportDialog';
 import { formatQty } from '../utils/units';
+import { exportXlsx, stamp } from '../utils/xlsx';
 
 const inr = (n) => `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—');
@@ -33,6 +34,7 @@ export default function Customers() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [downloadingId, setDownloadingId] = useState(null);
   const [reportOpen, setReportOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(() => { setDebouncedSearch(search.trim()); setPage(1); }, 300);
@@ -65,6 +67,39 @@ export default function Customers() {
     return () => { cancelled = true; };
   }, [selected]);
 
+  // Export every customer matching the current search (the API pages at most 100 at a time)
+  const handleExport = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const rows = [];
+      for (let p = 1, pages = 1; p <= pages && p <= 500; p++) {
+        const res = await apiFetch(`/customers?page=${p}&limit=100&search=${encodeURIComponent(debouncedSearch)}`);
+        rows.push(...(res.data || []));
+        pages = res.pagination?.totalPages || 1;
+      }
+      if (!rows.length) { toast.error('No customers to export'); return; }
+      await exportXlsx({
+        fileName: `Customers_${stamp()}`,
+        sheetName: 'Customers',
+        columns: [
+          { header: 'Name', key: 'name', width: 24 },
+          { header: 'Mobile', key: 'mobile', width: 14 },
+          { header: 'Email', key: 'email', width: 26 },
+          { header: 'GST No.', key: 'gstNumber', width: 18 },
+          { header: 'Orders', value: (c) => Number(c.orders) || 0, numFmt: '0' },
+          { header: 'Total Revenue', value: (c) => Number(c.revenue) || 0, numFmt: '#,##0.00', width: 16 },
+          { header: 'Last Order', value: (c) => (c.lastOrderAt ? new Date(c.lastOrderAt) : ''), numFmt: 'dd-mmm-yyyy hh:mm', width: 18 },
+        ],
+        rows,
+      });
+    } catch (err) {
+      toast.error(err.message || 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const handleDownload = async (inv) => {
     if (downloadingId) return;
     setDownloadingId(inv._id);
@@ -85,10 +120,16 @@ export default function Customers() {
             <h1 className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight text-gray-900">Customers</h1>
             <p className="text-base sm:text-lg text-gray-600">Everyone you've billed — saved automatically, with their order history</p>
           </div>
-          <button type="button" onClick={() => setReportOpen(true)}
-            className="self-start sm:self-auto inline-flex items-center gap-2 h-11 px-5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold shadow-lg">
-            <Download size={17} /> Download customer list
-          </button>
+          <div className="self-start sm:self-auto flex flex-wrap items-center gap-2">
+            <button type="button" onClick={handleExport} disabled={exporting || loading || customers.length === 0}
+              className="self-start sm:self-auto inline-flex items-center gap-2 h-11 px-5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold shadow-lg disabled:opacity-50">
+              {exporting ? <Loader2 size={17} className="animate-spin" /> : <FileSpreadsheet size={17} />} Export
+            </button>
+            <button type="button" onClick={() => setReportOpen(true)}
+              className="self-start sm:self-auto inline-flex items-center gap-2 h-11 px-5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold shadow-lg">
+              <Download size={17} /> Download customer list
+            </button>
+          </div>
         </div>
 
         <ReportDialog

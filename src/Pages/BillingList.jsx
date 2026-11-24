@@ -5,7 +5,7 @@ import { formatQty, perLabel } from '../utils/units';
 import { discountLabel, itemsTotal, lineDiscountLabel } from '../utils/gst';
 import {
   Eye, Printer, Send, X, ChevronLeft, ChevronRight, Banknote, Smartphone, CreditCard, Mail, Phone,
-  Download, Loader2, Search, Copy, Receipt, IndianRupee, TrendingUp, Store, SearchX, Trash2, AlertTriangle,
+  Download, Loader2, Search, Copy, Receipt, IndianRupee, TrendingUp, Store, SearchX, Trash2, AlertTriangle, FileSpreadsheet,
 } from 'lucide-react';
 import DOMPurify from 'dompurify';
 import { apiFetch, downloadInvoicePdf } from '../utils/api';
@@ -13,6 +13,7 @@ import { createPortal } from 'react-dom';
 import { printReceipt } from '../utils/receipt';
 import { BILL_MODES } from '../utils/billModes';
 import ReportDialog from '../Components/ReportDialog';
+import { exportXlsx, stamp } from '../utils/xlsx';
 
 const TYPES = [{ id: 'all', label: 'All types' }, ...Object.values(BILL_MODES).map((m) => ({ id: m.key, label: m.label }))];
 
@@ -27,6 +28,7 @@ function TypeChip({ type }) {
 const lineDetail = (p, inr) =>
   p.boxes > 0 ? `${p.boxes} box${p.boxes === 1 ? '' : 'es'} of ${formatQty(p.boxSize)} L (${formatQty(p.quantity, p.unit)})`
     : p.scoops > 0 ? `${p.scoops} scoop${p.scoops === 1 ? '' : 's'} of ${formatQty(p.scoopGrams)} g (${formatQty(p.quantity, p.unit)})`
+    : p.soldQty > 0 && p.soldUnit ? `${formatQty(p.soldQty, p.soldUnit)}${p.soldUnit === 'pcs' ? ' pcs' : ''} (${formatQty(p.quantity, p.unit)}${p.unit === 'pcs' ? ' pcs' : ''} of stock)`
     : `${formatQty(p.quantity, p.unit)} × ${inr(p.price)}${perLabel(p)}`;
 
 const LIMIT = 12;
@@ -145,6 +147,7 @@ export default function BillingList() {
   const [restock, setRestock] = useState(true);
   const [deleting, setDeleting] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const deleteRef = useRef(null);
   useEffect(() => { deleteRef.current = deleteBill; }, [deleteBill]);
   const searchRef = useRef(null);
@@ -245,6 +248,57 @@ export default function BillingList() {
     }
   };
 
+  // Export every bill matching the current filters (the API pages at most 100 at a time)
+  const handleExport = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const rows = [];
+      for (let p = 1, pages = 1; p <= pages && p <= 500; p++) {
+        const qs = new URLSearchParams({ page: p, limit: 100 });
+        if (search) qs.set('search', search);
+        if (payment !== 'all') qs.set('payment', payment);
+        if (billType !== 'all') qs.set('type', billType);
+        const from = rangeStart(range);
+        if (from) qs.set('from', from);
+        const data = await apiFetch(`/bill/fetch?${qs}`);
+        rows.push(...(data.data || []));
+        pages = data.pagination?.totalPages || 1;
+      }
+      if (!rows.length) { toast.error('No bills to export'); return; }
+      const money = '#,##0.00';
+      await exportXlsx({
+        fileName: `Bills_${stamp()}`,
+        sheetName: 'Bills',
+        columns: [
+          { header: 'Date', value: (b) => (b.createdAt ? new Date(b.createdAt) : ''), numFmt: 'dd-mmm-yyyy hh:mm', width: 18 },
+          { header: 'Invoice No.', key: 'invoiceNumber', width: 22 },
+          { header: 'Type', value: (b) => (BILL_MODES[b.billType] || BILL_MODES.retail).label, width: 18 },
+          { header: 'Customer', key: 'customerName', width: 22 },
+          { header: 'Mobile', key: 'mobileNumber', width: 14 },
+          { header: 'Email', key: 'customerEmail', width: 24 },
+          { header: 'Customer GST', key: 'customerGstNumber', width: 18 },
+          { header: 'Payment', value: (b) => getPaymentText(b.paymentMethod) },
+          { header: 'Billed By', value: (b) => b.billedBy?.name || '', width: 18 },
+          { header: 'Item Count', value: (b) => b.products?.length || 0 },
+          { header: 'Items', value: (b) => (b.products || []).map((p) => `${p.itemName}: ${lineDetail(p, inr)}`).join('; '), width: 50 },
+          { header: 'Items Total', value: (b) => itemsTotal(b), numFmt: money },
+          { header: 'Item Discounts', value: (b) => b.itemDiscountAmount || 0, numFmt: money },
+          { header: 'Bill Discount', value: (b) => b.discountAmount || 0, numFmt: money },
+          { header: 'Coupon', key: 'couponCode' },
+          { header: 'Taxable Value', value: (b) => b.subTotal || 0, numFmt: money },
+          { header: 'GST', value: (b) => b.gstAmount || 0, numFmt: money },
+          { header: 'Total', value: (b) => b.totalAmount || 0, numFmt: money },
+        ],
+        rows,
+      });
+    } catch (err) {
+      toast.error(err.message || 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const copyInvoice = (no) => {
     navigator.clipboard?.writeText(no).then(() => toast.success('Invoice number copied'), () => {});
   };
@@ -253,7 +307,7 @@ export default function BillingList() {
     const text = buildBillMessage({
       customerName: bill.customerName,
       invoice: bill.invoiceNumber,
-      items: bill.products.map((p) => ({ name: p.itemName, qty: formatQty(p.quantity, p.unit), price: p.price, per: perLabel(p), quantity: p.quantity, unit: p.unit, priceQty: p.priceQty, total: p.total, boxes: p.boxes, boxSize: p.boxSize, scoops: p.scoops, scoopGrams: p.scoopGrams, discountAmount: p.discountAmount, discountLabel: lineDiscountLabel(p) })),
+      items: bill.products.map((p) => ({ name: p.itemName, qty: formatQty(p.quantity, p.unit), price: p.price, per: perLabel(p), quantity: p.quantity, unit: p.unit, priceQty: p.priceQty, total: p.total, boxes: p.boxes, boxSize: p.boxSize, scoops: p.scoops, scoopGrams: p.scoopGrams, soldQty: p.soldQty, soldUnit: p.soldUnit, discountAmount: p.discountAmount, discountLabel: lineDiscountLabel(p) })),
       subTotal: bill.subTotal,
       gstAmount: bill.gstAmount,
       total: bill.totalAmount,
@@ -322,10 +376,16 @@ export default function BillingList() {
             <h1 className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight text-gray-900">Billing List</h1>
             <p className="text-base sm:text-lg text-gray-600">Every bill across all branches, searchable and filterable</p>
           </div>
-          <button type="button" onClick={() => setReportOpen(true)}
-            className="self-start sm:self-auto inline-flex items-center gap-2 h-11 px-5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold shadow-lg">
-            <Download size={17} /> Download report
-          </button>
+          <div className="self-start sm:self-auto flex flex-wrap items-center gap-2">
+            <button type="button" onClick={handleExport} disabled={exporting || totalRecords === 0}
+              className="self-start sm:self-auto inline-flex items-center gap-2 h-11 px-5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold shadow-lg disabled:opacity-50">
+              {exporting ? <Loader2 size={17} className="animate-spin" /> : <FileSpreadsheet size={17} />} Export
+            </button>
+            <button type="button" onClick={() => setReportOpen(true)}
+              className="self-start sm:self-auto inline-flex items-center gap-2 h-11 px-5 bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold shadow-lg">
+              <Download size={17} /> Download report
+            </button>
+          </div>
         </div>
 
         <ReportDialog

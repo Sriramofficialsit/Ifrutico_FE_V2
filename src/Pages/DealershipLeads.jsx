@@ -2,9 +2,10 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Users, Trash2, RefreshCw, CheckCircle, XCircle,
-  Search, Download, AlertCircle, MapPin, Mail, Phone
+  Search, Download, AlertCircle, MapPin, Mail, Phone, FileSpreadsheet
 } from "lucide-react";
 import toast from 'react-hot-toast';
+import { exportXlsx, stamp } from '../utils/xlsx';
 
 const API = `/api/dealership-leads`;
 
@@ -14,6 +15,7 @@ export default function DealershipLeads() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [deletingId, setDeletingId] = useState(null);
+  const [exporting, setExporting] = useState(false);
 
   const fetchLeads = async () => {
     setLoading(true);
@@ -77,6 +79,31 @@ export default function DealershipLeads() {
     }
   };
 
+  // Exports what the table shows (respects the search box)
+  const handleExport = async () => {
+    if (exporting || !filtered.length) return;
+    setExporting(true);
+    try {
+      await exportXlsx({
+        fileName: `Dealership_Enquiries_${stamp()}`,
+        sheetName: 'Dealership Enquiries',
+        columns: [
+          { header: 'Name', key: 'name', width: 24 },
+          { header: 'Location', key: 'location', width: 22 },
+          { header: 'Email', key: 'email', width: 26 },
+          { header: 'Contact', key: 'contact', width: 16 },
+          { header: 'Status', key: 'status' },
+          { header: 'Date', value: (l) => (l.createdAt ? new Date(l.createdAt) : ''), numFmt: 'dd-mmm-yyyy hh:mm', width: 18 },
+        ],
+        rows: filtered,
+      });
+    } catch (err) {
+      toast.error(err?.message || 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const exportCSV = () => {
     const rows = [["Name", "Location", "Email", "Contact", "Status", "Date"], ...leads.map(l => [l.name, l.location, l.email, l.contact, l.status, new Date(l.createdAt).toLocaleString()])];
     const csv = rows.map(r => r.join(",")).join("\n");
@@ -97,7 +124,7 @@ export default function DealershipLeads() {
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 tracking-tight">Dealership Enquiries</h1>
           <p className="text-sm text-gray-500 mt-1">Manage partner applications and enquiries</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <button onClick={fetchLeads} className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors text-sm font-medium">
             <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
             Refresh
@@ -105,6 +132,10 @@ export default function DealershipLeads() {
           <button onClick={exportCSV} disabled={!leads.length} className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-orange-600 text-white hover:bg-orange-700 transition-colors text-sm font-semibold disabled:opacity-50">
             <Download className="w-4 h-4" />
             Export CSV
+          </button>
+          <button onClick={handleExport} disabled={exporting || !filtered.length} className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-orange-600 text-white hover:bg-orange-700 transition-colors text-sm font-semibold disabled:opacity-50">
+            {exporting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+            Export
           </button>
         </div>
       </div>

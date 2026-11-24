@@ -2,9 +2,10 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Phone, Trash2, RefreshCw, ShoppingBag, Download,
-  Search, CheckCircle, AlertCircle, MessageSquare, Tag
+  Search, CheckCircle, AlertCircle, MessageSquare, Tag, FileSpreadsheet
 } from "lucide-react";
 import toast from 'react-hot-toast';
+import { exportXlsx, stamp } from '../utils/xlsx';
 
 const API = `/api/order-leads`;
 
@@ -14,6 +15,7 @@ export default function OrderLeads() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [deletingId, setDeletingId] = useState(null);
+  const [exporting, setExporting] = useState(false);
 
   const fetchLeads = async () => {
     setLoading(true);
@@ -76,6 +78,30 @@ export default function OrderLeads() {
     }
   };
 
+  // Exports what the table shows (respects the search box)
+  const handleExport = async () => {
+    if (exporting || !filtered.length) return;
+    setExporting(true);
+    try {
+      await exportXlsx({
+        fileName: `Product_Enquiries_${stamp()}`,
+        sheetName: 'Product Enquiries',
+        columns: [
+          { header: 'Product', key: 'productName', width: 24 },
+          { header: 'Mobile', key: 'mobile', width: 16 },
+          { header: 'Message', key: 'message', width: 50 },
+          { header: 'Status', value: (l) => (l.status ? l.status.charAt(0).toUpperCase() + l.status.slice(1) : '') },
+          { header: 'Date', value: (l) => (l.createdAt ? new Date(l.createdAt) : ''), numFmt: 'dd-mmm-yyyy hh:mm', width: 18 },
+        ],
+        rows: filtered,
+      });
+    } catch (err) {
+      toast.error(err?.message || 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const exportCSV = () => {
     const rows = [["Product", "Mobile", "Message", "Status", "Date"], ...leads.map(l => [l.productName, l.mobile, l.message, l.status, new Date(l.createdAt).toLocaleString()])];
     const csv = rows.map(r => r.join(",")).join("\n");
@@ -96,7 +122,7 @@ export default function OrderLeads() {
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 tracking-tight">Product Enquiries</h1>
           <p className="text-sm text-gray-500 mt-1">Direct order leads from the landing page</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <button
             onClick={fetchLeads}
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors text-sm font-medium"
@@ -111,6 +137,10 @@ export default function OrderLeads() {
           >
             <Download className="w-4 h-4" />
             Export CSV
+          </button>
+          <button onClick={handleExport} disabled={exporting || !filtered.length} className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 text-white hover:bg-blue-700 transition-colors text-sm font-semibold disabled:opacity-50">
+            {exporting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+            Export
           </button>
         </div>
       </div>
